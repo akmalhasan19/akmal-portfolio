@@ -100,20 +100,43 @@ const normalizeAngleDelta = (delta: number) => {
   return normalized;
 };
 
+const isHalfTurn = (delta: number, toleranceRad = MathUtils.degToRad(12)) =>
+  Math.abs(Math.abs(delta) - Math.PI) < toleranceRad;
+
 const resolveDirectedTargetAngle = (
   currentAngle: number,
   targetAngle: number,
   preferPositiveTurn: boolean,
+  options?: {
+    allowLongPath?: boolean;
+    halfTurnToleranceRad?: number;
+  },
 ) => {
-  const shortestDelta = normalizeAngleDelta(targetAngle - currentAngle);
+  const allowLongPath = options?.allowLongPath ?? false;
+  const halfTurnToleranceRad = options?.halfTurnToleranceRad ?? MathUtils.degToRad(12);
+
+  let shortestDelta = normalizeAngleDelta(targetAngle - currentAngle);
+  const isHalfTurnDelta = isHalfTurn(shortestDelta, halfTurnToleranceRad);
+  if (isHalfTurnDelta) {
+    shortestDelta = preferPositiveTurn ? Math.PI : -Math.PI;
+  }
+
   let delta = shortestDelta;
-  if (preferPositiveTurn && delta < 0) {
-    delta += TAU;
-  } else if (!preferPositiveTurn && delta > 0) {
-    delta -= TAU;
+  // Direction lock is only needed around 180deg ambiguity.
+  // For regular deltas, keep shortest-path to avoid unintended full spins.
+  if (isHalfTurnDelta) {
+    if (preferPositiveTurn && delta < 0) {
+      delta += TAU;
+    } else if (!preferPositiveTurn && delta > 0) {
+      delta -= TAU;
+    }
   }
   // Avoid long-path rotations that visually look like multiple spins.
-  if (Math.abs(delta) > MAX_DIRECTIONAL_TURN) {
+  if (
+    !allowLongPath
+    && Math.abs(delta) > MAX_DIRECTIONAL_TURN
+    && !isHalfTurnDelta
+  ) {
     delta = shortestDelta;
   }
   return currentAngle + delta;
@@ -737,7 +760,21 @@ const Page = ({
 
       if (bookClosed) {
         const closedRotationY = i === 0 ? targetRotation : 0;
-        easing.dampAngle(target.rotation, "y", closedRotationY, easingFactor, delta);
+        const isCoverRoot = (isFrontCover || isBackCover) && i === 0;
+        if (isCoverRoot) {
+          const directedClosedTarget = resolveDirectedTargetAngle(
+            target.rotation.y,
+            closedRotationY,
+            !opened,
+            {
+              allowLongPath: true,
+              halfTurnToleranceRad: MathUtils.degToRad(20),
+            },
+          );
+          easing.damp(target.rotation, "y", directedClosedTarget, easingFactor, delta);
+        } else {
+          easing.dampAngle(target.rotation, "y", closedRotationY, easingFactor, delta);
+        }
         easing.dampAngle(target.rotation, "x", 0, easingFactorFold, delta);
         continue;
       }
@@ -785,19 +822,24 @@ const Page = ({
       }
 
       // --- FINAL APPLICATION ---
-      if (isFrontCover && i === 0) {
+      const isCoverRoot = (isFrontCover || isBackCover) && i === 0;
+      if (isCoverRoot) {
+        const preferPositiveTurn = !opened;
         const directedTarget = resolveDirectedTargetAngle(
           target.rotation.y,
           rotationAngle,
-          !opened,
+          preferPositiveTurn,
+          {
+            allowLongPath: true,
+            halfTurnToleranceRad: MathUtils.degToRad(20),
+          },
         );
         easing.damp(target.rotation, "y", directedTarget, easingFactor, delta);
       } else {
         easing.dampAngle(target.rotation, "y", rotationAngle, easingFactor, delta);
+        target.rotation.y =
+          MathUtils.euclideanModulo(target.rotation.y + Math.PI, TAU) - Math.PI;
       }
-
-      target.rotation.y =
-        MathUtils.euclideanModulo(target.rotation.y + Math.PI, TAU) - Math.PI;
 
       // --- X-Axis Fold ---
       const foldRotationAngle = i === 0 ? 0 : MathUtils.degToRad(Math.sign(targetRotation) * 0.5);
