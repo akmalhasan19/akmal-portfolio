@@ -1,11 +1,13 @@
 import { useCursor, useTexture } from "@react-three/drei";
 import { ThreeElements, useFrame } from "@react-three/fiber";
-import { atom, useAtom, type PrimitiveAtom } from "jotai";
+import { atom, useAtom, useSetAtom, type PrimitiveAtom } from "jotai";
 import { easing } from "maath";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bone,
   BoxGeometry,
+  CanvasTexture,
+  ClampToEdgeWrapping,
   Color,
   CylinderGeometry,
   Float32BufferAttribute,
@@ -19,11 +21,11 @@ import {
   Uint16BufferAttribute,
   Vector3,
 } from "three";
+import { pageSideKey } from "@/types/book-content";
+import type { DynamicTextureMap } from "@/lib/book-content/useBookSideTextures";
 
 const easingFactor = 0.5;
 const easingFactorFold = 0.3;
-const insideCurveStrength = 0.18;
-const outsideCurveStrength = 0.05;
 const turningCurveStrength = 0.09;
 
 const DEFAULT_PAGE_WIDTH = 1.28;
@@ -41,7 +43,7 @@ const COVER_DEPTH_SEGMENTS = 14;
 const COVER_CORNER_RADIUS = 0.045;
 const COVER_CONNECTOR_HEIGHT_TRIM = 0.001;
 const COVER_CONNECTOR_RADIUS_SCALE = 0.5;
-const COVER_CONNECTOR_X_OFFSET = -0.05;
+const COVER_CONNECTOR_X_OFFSET = -0.06;
 const TAU = Math.PI * 2;
 const ANGLE_EPSILON = 1e-5;
 const MAX_DIRECTIONAL_TURN = Math.PI - MathUtils.degToRad(2);
@@ -55,6 +57,7 @@ const RIGHT_STACK_FAN_STEP = MathUtils.degToRad(0.72);
 const LEFT_STACK_FAN_STEP = MathUtils.degToRad(0.24);
 const PAGE_COVER_CLEARANCE_ANGLE = MathUtils.degToRad(3.4);
 const COVER_TO_TEXTBLOCK_GAP = 0.0012;
+const COVER_SURFACE_GUARD_Z = 0.0016;
 const ACTIVE_PAGE_LIFT_Z = 0.0065;
 const ACTIVE_PAGE_LIFT_Y = 0.0028;
 
@@ -65,6 +68,28 @@ const paperEdgeColor = new Color("#e1cfaa");
 const defaultCoverBoardColor = new Color("#9a3727");
 const defaultCoverBoardDarkColor = new Color("#74261a");
 const coverConnectorColor = new Color("#4a170f");
+const pageSideMaterials: MeshStandardMaterial[] = [
+  new MeshStandardMaterial({ color: paperEdgeColor, roughness: 0.96, metalness: 0.01 }),
+  new MeshStandardMaterial({ color: paperEdgeColor, roughness: 0.98, metalness: 0.01 }),
+  new MeshStandardMaterial({ color: paperEdgeColor, roughness: 0.96, metalness: 0.01 }),
+  new MeshStandardMaterial({ color: paperEdgeColor, roughness: 0.96, metalness: 0.01 }),
+];
+const coverSideMaterialCache = new Map<string, MeshStandardMaterial[]>();
+
+const getCoverSideMaterials = (coverDarkColor: Color) => {
+  const cacheKey = coverDarkColor.getHexString();
+  const cachedMaterials = coverSideMaterialCache.get(cacheKey);
+  if (cachedMaterials) {
+    return cachedMaterials;
+  }
+
+  const materials = Array.from(
+    { length: 4 },
+    () => new MeshStandardMaterial({ color: coverDarkColor, roughness: 0.95, metalness: 0.05 }),
+  );
+  coverSideMaterialCache.set(cacheKey, materials);
+  return materials;
+};
 type GroupProps = ThreeElements["group"];
 
 const normalizeAngleDelta = (delta: number) => {
@@ -141,6 +166,55 @@ const createSkinnedPageGeometry = ({
   geometry.setAttribute("skinIndex", new Uint16BufferAttribute(skinIndexes, 4));
   geometry.setAttribute("skinWeight", new Float32BufferAttribute(skinWeights, 4));
 
+  return geometry;
+};
+
+interface CachedPageGeometryOptions extends SkinnedGeometryOptions {
+  roundedCornerRadius?: number;
+}
+
+const skinnedGeometryCache = new Map<string, BoxGeometry>();
+
+const getCachedSkinnedGeometry = ({
+  width,
+  height,
+  depth,
+  heightSegments,
+  depthSegments,
+  roundedCornerRadius = 0,
+}: CachedPageGeometryOptions) => {
+  const cacheKey = [
+    width.toFixed(5),
+    height.toFixed(5),
+    depth.toFixed(5),
+    heightSegments,
+    depthSegments,
+    roundedCornerRadius.toFixed(5),
+  ].join(":");
+
+  const cachedGeometry = skinnedGeometryCache.get(cacheKey);
+  if (cachedGeometry) {
+    return cachedGeometry;
+  }
+
+  const geometry = createSkinnedPageGeometry({
+    width,
+    height,
+    depth,
+    heightSegments,
+    depthSegments,
+  });
+
+  if (roundedCornerRadius > 0) {
+    applyOuterRoundedCornersXY(
+      geometry,
+      width,
+      height,
+      roundedCornerRadius,
+    );
+  }
+
+  skinnedGeometryCache.set(cacheKey, geometry);
   return geometry;
 };
 
@@ -226,11 +300,11 @@ const pictures = [
   "DSC02069",
 ];
 
-export const createBookAtom = () => atom(0);
+export const createBookAtom = (initialPage = 0) => atom(initialPage);
 export const pageAtom = createBookAtom();
 export const pages: Array<{ front: string; back: string }> = [
   {
-    front: "book-cover",
+    front: "__book-cover",
     back: "__cover-inner-front",
   },
 ];
@@ -244,20 +318,8 @@ for (let i = 0; i < pictures.length - 1; i += 2) {
 
 pages.push({
   front: "__cover-inner-back",
-  back: "book-back",
+  back: "__book-back",
 });
-
-const sheetDepths = pages.map((_, index) =>
-  index === 0 || index === pages.length - 1 ? COVER_DEPTH : PAGE_DEPTH,
-);
-
-const sheetGaps = sheetDepths.slice(0, -1).map((_, index) =>
-  index === 0 || index === sheetDepths.length - 2 ? COVER_TO_TEXTBLOCK_GAP : STACK_GAP,
-);
-
-const totalStackDepth =
-  sheetDepths.reduce((sum, depth) => sum + depth, 0) +
-  sheetGaps.reduce((sum, gap) => sum + gap, 0);
 
 const createCoverConnectorGeometry = (
   height: number,
@@ -272,38 +334,51 @@ const createCoverConnectorGeometry = (
     28,
     1,
     false,
-    Math.PI / -1,
-    Math.PI,
+    Math.PI / -0.75, // thetaStart adjusted for quarter cylinder
+    Math.PI / 1.5,   // thetaLength reduced to ~quarter cylinder (slightly more for coverage)
   );
   // Flat side stays on hinge line (x=0), curved side points outward.
   geometry.rotateY(Math.PI / 2); // Putar 90 derjat agar lengkungan menghadap ke arah yang benar
   return geometry;
 };
 
-const sheetZOffsets = (() => {
-  let cursor = totalStackDepth / 2;
-  return sheetDepths.map((depth, index) => {
-    const centerZ = cursor - depth / 2;
-    const gap = index < sheetGaps.length ? sheetGaps[index] : 0;
-    cursor -= depth + gap;
-    return centerZ;
-  });
-})();
-
-pages.forEach((page) => {
-  if (!page.front.startsWith("__")) {
-    useTexture.preload(`/textures/${page.front}.jpg`);
-  }
-  if (!page.back.startsWith("__")) {
-    useTexture.preload(`/textures/${page.back}.jpg`);
-  }
-});
-useTexture.preload("/textures/book-cover-roughness.jpg");
-
 export interface PageData {
   front: string;
   back: string;
 }
+
+const STRIP_FIRST_COVER: PageData = {
+  front: "__book-cover",
+  back: "__cover-inner-front",
+};
+
+const STRIP_LAST_COVER: PageData = {
+  front: "__cover-inner-back",
+  back: "__book-back",
+};
+
+const stripEmbeddedCovers = (inputPages: PageData[]) => {
+  const normalizedPages = [...inputPages];
+  const firstPage = normalizedPages[0];
+  if (
+    firstPage
+    && firstPage.front === STRIP_FIRST_COVER.front
+    && firstPage.back === STRIP_FIRST_COVER.back
+  ) {
+    normalizedPages.shift();
+  }
+
+  const lastPage = normalizedPages[normalizedPages.length - 1];
+  if (
+    lastPage
+    && lastPage.front === STRIP_LAST_COVER.front
+    && lastPage.back === STRIP_LAST_COVER.back
+  ) {
+    normalizedPages.pop();
+  }
+
+  return normalizedPages;
+};
 
 interface PageProps extends GroupProps {
   number: number;
@@ -316,56 +391,142 @@ interface PageProps extends GroupProps {
   width: number;
   height: number;
   coverColor?: string;
+  coverFrontTexturePath?: string;
+  coverBackTexturePath?: string;
+  coverFrontTextureOffsetY?: number;
+  coverBackTextureOffsetY?: number;
   totalPages: number;
   zOffset?: number;
   anchorZOffset?: number;
+  texturesEnabled: boolean;
+  enableShadows: boolean;
+  contentEnabled?: boolean;
+  dynamicContent?: DynamicTextureMap;
+  fallbackMode?: "legacy-texture" | "blank-white";
 }
 
-const Page = ({ number, front, back, page, opened, bookClosed, bookAtom: externalAtom, width, height, coverColor, totalPages, zOffset, anchorZOffset, ...props }: PageProps) => {
+const Page = ({
+  number,
+  front,
+  back,
+  page,
+  opened,
+  bookClosed,
+  bookAtom: externalAtom,
+  width,
+  height,
+  coverColor,
+  coverFrontTexturePath,
+  coverBackTexturePath,
+  coverFrontTextureOffsetY,
+  coverBackTextureOffsetY,
+  totalPages,
+  zOffset,
+  anchorZOffset,
+  texturesEnabled,
+  enableShadows,
+  contentEnabled,
+  dynamicContent,
+  fallbackMode = "legacy-texture",
+  ...props
+}: PageProps) => {
   const isCoverPage = number === 0 || number === totalPages - 1;
   const isFrontCover = number === 0;
   const isBackCover = number === totalPages - 1;
-  const hasFrontTexture = !front.startsWith("__");
-  const hasBackTexture = !back.startsWith("__");
+
+  // Dynamic content textures (from Supabase-rendered CanvasTextures)
+  const dynamicFrontTexture = contentEnabled && dynamicContent
+    ? dynamicContent[pageSideKey(number, "front")]
+    : undefined;
+  const dynamicBackTexture = contentEnabled && dynamicContent
+    ? dynamicContent[pageSideKey(number, "back")]
+    : undefined;
+
+  // When contentEnabled + blank-white fallback: don't load legacy textures for non-cover pages
+  const useLegacyFront = contentEnabled && fallbackMode === "blank-white"
+    ? false
+    : !front.startsWith("__");
+  const useLegacyBack = contentEnabled && fallbackMode === "blank-white"
+    ? false
+    : !back.startsWith("__");
+
+  const hasFrontTexture = texturesEnabled && useLegacyFront && !dynamicFrontTexture;
+  const hasBackTexture = texturesEnabled && useLegacyBack && !dynamicBackTexture;
+  const activeCoverFrontTexturePath = isFrontCover ? coverFrontTexturePath : undefined;
+  const activeCoverBackTexturePath = isBackCover ? coverBackTexturePath : undefined;
   const texturePaths = [
     ...(hasFrontTexture ? [`/textures/${front}.jpg`] : []),
     ...(hasBackTexture ? [`/textures/${back}.jpg`] : []),
-    ...(isCoverPage ? ["/textures/book-cover-roughness.jpg"] : []),
+    ...(activeCoverFrontTexturePath ? [activeCoverFrontTexturePath] : []),
+    ...(activeCoverBackTexturePath ? [activeCoverBackTexturePath] : []),
   ];
 
   const loadedTextures = useTexture(
     texturePaths,
     (textures) => {
       const textureArray = Array.isArray(textures) ? textures : [textures];
-      let textureIndex = 0;
-      if (hasFrontTexture && textureArray[textureIndex]) {
-        textureArray[textureIndex].colorSpace = SRGBColorSpace;
-        textureIndex += 1;
-      }
-      if (hasBackTexture && textureArray[textureIndex]) {
-        textureArray[textureIndex].colorSpace = SRGBColorSpace;
-      }
+      textureArray.forEach((texture) => {
+        if (texture) {
+          texture.colorSpace = SRGBColorSpace;
+        }
+      });
     },
   ) as Texture[];
 
   let textureIndex = 0;
   const picture = hasFrontTexture ? loadedTextures[textureIndex++] : undefined;
   const picture2 = hasBackTexture ? loadedTextures[textureIndex++] : undefined;
-  const pictureRoughness = isCoverPage ? loadedTextures[textureIndex] : undefined;
+  const coverFrontTexture = activeCoverFrontTexturePath
+    ? loadedTextures[textureIndex++]
+    : undefined;
+  const coverBackTexture = activeCoverBackTexturePath
+    ? loadedTextures[textureIndex]
+    : undefined;
+
+  const mappedCoverFrontTexture = useMemo(() => {
+    if (!coverFrontTexture) {
+      return undefined;
+    }
+    const texture = coverFrontTexture.clone();
+    texture.wrapS = ClampToEdgeWrapping;
+    texture.wrapT = ClampToEdgeWrapping;
+    texture.offset.set(0, coverFrontTextureOffsetY ?? 0);
+    texture.needsUpdate = true;
+    return texture;
+  }, [coverFrontTexture, coverFrontTextureOffsetY]);
+
+  const mappedCoverBackTexture = useMemo(() => {
+    if (!coverBackTexture) {
+      return undefined;
+    }
+    const texture = coverBackTexture.clone();
+    texture.wrapS = ClampToEdgeWrapping;
+    texture.wrapT = ClampToEdgeWrapping;
+    texture.offset.set(0, coverBackTextureOffsetY ?? 0);
+    texture.needsUpdate = true;
+    return texture;
+  }, [coverBackTexture, coverBackTextureOffsetY]);
 
   const group = useRef<Group | null>(null);
   const turnedAt = useRef(0);
   const lastOpened = useRef(opened);
   const turnDirection = useRef<1 | -1>(opened ? 1 : -1);
   const skinnedMeshRef = useRef<SkinnedMesh | null>(null);
+  const idleRef = useRef(false);
+  const settledFrameCount = useRef(0);
+  const lastFrameState = useRef({
+    rootY: opened ? -Math.PI / 2 : Math.PI / 2,
+    y: 0,
+    z: 0,
+  });
   const [highlighted, setHighlighted] = useState(false);
-  const [, setPage] = useAtom(externalAtom ?? pageAtom);
+  const setPage = useSetAtom(externalAtom ?? pageAtom);
 
   const customCoverColor = useMemo(() => coverColor ? new Color(coverColor) : defaultCoverBoardColor, [coverColor]);
   const customCoverDarkColor = useMemo(() => coverColor ? new Color(coverColor).multiplyScalar(0.7) : defaultCoverBoardDarkColor, [coverColor]);
 
   const manualSkinnedMesh = useMemo(() => {
-    const pageGeometry = createSkinnedPageGeometry({
+    const pageGeometry = getCachedSkinnedGeometry({
       width: width,
       height: height,
       depth: PAGE_DEPTH,
@@ -373,19 +534,14 @@ const Page = ({ number, front, back, page, opened, bookClosed, bookAtom: externa
       depthSegments: PAGE_DEPTH_SEGMENTS,
     });
 
-    const coverGeometry = createSkinnedPageGeometry({
+    const coverGeometry = getCachedSkinnedGeometry({
       width: width + COVER_OVERHANG_X,
       height: height + COVER_OVERHANG_Y,
       depth: COVER_DEPTH,
       heightSegments: COVER_HEIGHT_SEGMENTS,
       depthSegments: COVER_DEPTH_SEGMENTS,
+      roundedCornerRadius: COVER_CORNER_RADIUS,
     });
-    applyOuterRoundedCornersXY(
-      coverGeometry,
-      width + COVER_OVERHANG_X,
-      height + COVER_OVERHANG_Y,
-      COVER_CORNER_RADIUS,
-    );
 
     const bones: Bone[] = [];
     const segmentWidth = (isCoverPage ? width + COVER_OVERHANG_X : width) / PAGE_SEGMENTS;
@@ -401,61 +557,67 @@ const Page = ({ number, front, back, page, opened, bookClosed, bookAtom: externa
 
     const skeleton = new Skeleton(bones);
 
-    const sideMaterials: MeshStandardMaterial[] = isCoverPage
-      ? [
-        new MeshStandardMaterial({ color: customCoverDarkColor, roughness: 0.95, metalness: 0.05 }),
-        new MeshStandardMaterial({ color: customCoverDarkColor, roughness: 0.95, metalness: 0.05 }),
-        new MeshStandardMaterial({ color: customCoverDarkColor, roughness: 0.95, metalness: 0.05 }),
-        new MeshStandardMaterial({ color: customCoverDarkColor, roughness: 0.95, metalness: 0.05 }),
-      ]
-      : [
-        new MeshStandardMaterial({ color: paperEdgeColor, roughness: 0.96, metalness: 0.01 }),
-        new MeshStandardMaterial({ color: paperEdgeColor, roughness: 0.98, metalness: 0.01 }),
-        new MeshStandardMaterial({ color: paperEdgeColor, roughness: 0.96, metalness: 0.01 }),
-        new MeshStandardMaterial({ color: paperEdgeColor, roughness: 0.96, metalness: 0.01 }),
-      ];
+    const sideMaterials = isCoverPage
+      ? getCoverSideMaterials(customCoverDarkColor)
+      : pageSideMaterials;
+
+    // Resolve front face map: dynamic > legacy photo > none
+    const frontFaceMap = isCoverPage
+      ? (isFrontCover && mappedCoverFrontTexture ? mappedCoverFrontTexture : undefined)
+      : dynamicFrontTexture
+        ? dynamicFrontTexture
+        : picture
+          ? picture
+          : undefined;
+
+    // Resolve back face map: dynamic > legacy photo > none
+    const backFaceMap = isCoverPage
+      ? (isBackCover && mappedCoverBackTexture ? mappedCoverBackTexture : undefined)
+      : dynamicBackTexture
+        ? dynamicBackTexture
+        : picture2
+          ? picture2
+          : undefined;
+
+    // Choose front face color
+    const frontFaceColor = isCoverPage
+      ? isFrontCover
+        ? mappedCoverFrontTexture ? whiteColor : customCoverColor
+        : paperFaceColor
+      : frontFaceMap
+        ? whiteColor
+        : paperFaceColor;
+
+    // Choose back face color
+    const backFaceColor = isCoverPage
+      ? isBackCover
+        ? mappedCoverBackTexture ? whiteColor : customCoverColor
+        : paperFaceColor
+      : backFaceMap
+        ? whiteColor
+        : paperFaceColor;
 
     const materials: MeshStandardMaterial[] = [
       ...sideMaterials,
       new MeshStandardMaterial({
-        color: isCoverPage
-          ? isFrontCover
-            ? customCoverColor
-            : paperFaceColor
-          : hasFrontTexture
-            ? whiteColor
-            : paperFaceColor,
-        ...(isCoverPage ? {} : picture ? { map: picture } : {}),
-        ...(isCoverPage
-          ? pictureRoughness
-            ? { roughnessMap: pictureRoughness }
-            : { roughness: 0.9 }
-          : { roughness: 0.1 }),
+        color: frontFaceColor,
+        ...(frontFaceMap ? { map: frontFaceMap } : {}),
+        roughness: isCoverPage ? 0.9 : 0.1,
         emissive: emissiveColor,
         emissiveIntensity: 0,
       }),
       new MeshStandardMaterial({
-        color: isCoverPage
-          ? isBackCover
-            ? customCoverColor
-            : paperFaceColor
-          : hasBackTexture
-            ? whiteColor
-            : paperFaceColor,
-        ...(isCoverPage ? {} : picture2 ? { map: picture2 } : {}),
-        ...(isCoverPage
-          ? pictureRoughness
-            ? { roughnessMap: pictureRoughness }
-            : { roughness: 0.9 }
-          : { roughness: 0.1 }),
+        color: backFaceColor,
+        ...(backFaceMap ? { map: backFaceMap } : {}),
+        roughness: isCoverPage ? 0.9 : 0.1,
         emissive: emissiveColor,
         emissiveIntensity: 0,
       }),
     ];
 
     const mesh = new SkinnedMesh(isCoverPage ? coverGeometry : pageGeometry, materials);
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
+    mesh.castShadow = enableShadows;
+    mesh.receiveShadow = enableShadows;
     mesh.frustumCulled = false;
     mesh.add(skeleton.bones[0]);
     mesh.bind(skeleton);
@@ -468,12 +630,15 @@ const Page = ({ number, front, back, page, opened, bookClosed, bookAtom: externa
     isCoverPage,
     picture,
     picture2,
-    pictureRoughness,
+    mappedCoverFrontTexture,
+    mappedCoverBackTexture,
+    dynamicFrontTexture,
+    dynamicBackTexture,
     width,
     height,
     customCoverColor,
     customCoverDarkColor,
-    totalPages
+    enableShadows,
   ]);
 
   useCursor(highlighted);
@@ -488,21 +653,38 @@ const Page = ({ number, front, back, page, opened, bookClosed, bookAtom: externa
 
   const relativeSheetZ = (zOffset ?? 0) - (anchorZOffset ?? 0);
 
-  const stackDepthOffset = Math.min(0.0028, stackRank * 0.00035);
+  // Prevent stack settling from pushing pages through the cover.
+  const maxSafeStackOffset = Math.max(0.00035, COVER_TO_TEXTBLOCK_GAP * 0.65);
+  const stackDepthOffset = Math.min(maxSafeStackOffset, stackRank * 0.00035);
   const stackSettleY = isCoverPage ? 0 : -Math.min(0.014, stackRank * 0.0018);
   const stackSettleZ = isCoverPage
     ? 0
     : (opened ? -1 : 1) * stackDepthOffset;
+  const coverSurfaceGuard = isCoverPage
+    ? (isFrontCover ? COVER_SURFACE_GUARD_Z : -COVER_SURFACE_GUARD_Z)
+    : 0;
+
+  useEffect(() => {
+    idleRef.current = false;
+    settledFrameCount.current = 0;
+  }, [bookClosed, highlighted, opened, page, totalPages]);
 
   useFrame((_, delta) => {
     if (!skinnedMeshRef.current || !group.current) {
       return;
     }
+    if (idleRef.current && !highlighted) {
+      return;
+    }
 
     const materials = skinnedMeshRef.current.material as MeshStandardMaterial[];
     const emissiveIntensity = highlighted ? 0.22 : 0;
-    if (materials[4]) materials[4].emissiveIntensity = MathUtils.lerp(materials[4].emissiveIntensity, emissiveIntensity, 0.1);
-    if (materials[5]) materials[5].emissiveIntensity = MathUtils.lerp(materials[5].emissiveIntensity, emissiveIntensity, 0.1);
+    if (materials[4] && (highlighted || materials[4].emissiveIntensity > 0.001)) {
+      materials[4].emissiveIntensity = MathUtils.lerp(materials[4].emissiveIntensity, emissiveIntensity, 0.1);
+    }
+    if (materials[5] && (highlighted || materials[5].emissiveIntensity > 0.001)) {
+      materials[5].emissiveIntensity = MathUtils.lerp(materials[5].emissiveIntensity, emissiveIntensity, 0.1);
+    }
 
     if (lastOpened.current !== opened) {
       turnedAt.current = Date.now();
@@ -553,9 +735,6 @@ const Page = ({ number, front, back, page, opened, bookClosed, bookAtom: externa
     const activeTurnInfluence = isCoverPage
       ? 1
       : MathUtils.clamp(1 - pageDistance / 1.1, 0, 1);
-    const dynamicCurveInfluence = isBackwardTurn
-      ? 0
-      : turningTime * activeTurnInfluence;
 
     const bones = skinnedMeshRef.current.skeleton.bones;
     for (let i = 0; i < bones.length; i += 1) {
@@ -643,6 +822,31 @@ const Page = ({ number, front, back, page, opened, bookClosed, bookAtom: externa
         delta,
       );
     }
+
+    const rootBone = skinnedMeshRef.current.skeleton.bones[0];
+    if (!rootBone) {
+      return;
+    }
+
+    const frameDelta =
+      Math.abs(normalizeAngleDelta(rootBone.rotation.y - lastFrameState.current.rootY)) +
+      Math.abs(group.current.position.y - lastFrameState.current.y) +
+      Math.abs(group.current.position.z - lastFrameState.current.z);
+
+    lastFrameState.current = {
+      rootY: rootBone.rotation.y,
+      y: group.current.position.y,
+      z: group.current.position.z,
+    };
+
+    if (!highlighted && turningTime <= 0.001 && frameDelta < 0.00015) {
+      settledFrameCount.current += 1;
+      if (settledFrameCount.current > 24) {
+        idleRef.current = true;
+      }
+    } else {
+      settledFrameCount.current = 0;
+    }
   });
 
   return (
@@ -668,7 +872,7 @@ const Page = ({ number, front, back, page, opened, bookClosed, bookAtom: externa
         ref={skinnedMeshRef}
         position-x={0}
         position-y={stackSettleY}
-        position-z={relativeSheetZ + stackSettleZ}
+        position-z={relativeSheetZ + stackSettleZ + coverSurfaceGuard}
       />
     </group>
   );
@@ -679,10 +883,38 @@ export interface Book3DProps extends GroupProps {
   width?: number;
   height?: number;
   coverColor?: string;
+  coverFrontTexturePath?: string;
+  coverBackTexturePath?: string;
+  coverFrontTextureOffsetY?: number;
+  coverBackTextureOffsetY?: number;
   pages?: PageData[];
+  textureLoadRadius?: number;
+  enableShadows?: boolean;
+  /** Enable dynamic content rendering for this book. */
+  contentEnabled?: boolean;
+  /** Map of page-side keys to CanvasTextures. */
+  dynamicContent?: DynamicTextureMap;
+  /** Fallback for pages without dynamic content. */
+  fallbackMode?: "legacy-texture" | "blank-white";
 }
 
-export const Book3D = ({ bookAtom: externalAtom, width = DEFAULT_PAGE_WIDTH, height = DEFAULT_PAGE_HEIGHT, coverColor, pages: customPages, ...props }: Book3DProps) => {
+export const Book3D = ({
+  bookAtom: externalAtom,
+  width = DEFAULT_PAGE_WIDTH,
+  height = DEFAULT_PAGE_HEIGHT,
+  coverColor,
+  coverFrontTexturePath,
+  coverBackTexturePath,
+  coverFrontTextureOffsetY,
+  coverBackTextureOffsetY,
+  pages: customPages,
+  textureLoadRadius = Number.POSITIVE_INFINITY,
+  enableShadows = true,
+  contentEnabled,
+  dynamicContent,
+  fallbackMode,
+  ...props
+}: Book3DProps) => {
   const activeAtom = externalAtom ?? pageAtom;
   const [page] = useAtom(activeAtom);
   const [delayedPage, setDelayedPage] = useState(page);
@@ -690,10 +922,11 @@ export const Book3D = ({ bookAtom: externalAtom, width = DEFAULT_PAGE_WIDTH, hei
 
   const activePages = useMemo(() => {
     if (customPages) {
+      const normalizedCustomPages = stripEmbeddedCovers(customPages);
       const wrapped: PageData[] = [
-        { front: "book-cover", back: "__cover-inner-front" },
-        ...customPages,
-        { front: "__cover-inner-back", back: "book-back" }
+        { front: "__book-cover", back: "__cover-inner-front" },
+        ...normalizedCustomPages,
+        { front: "__cover-inner-back", back: "__book-back" }
       ];
       return wrapped;
     }
@@ -715,13 +948,17 @@ export const Book3D = ({ bookAtom: externalAtom, width = DEFAULT_PAGE_WIDTH, hei
     );
     const total = depths.reduce((sum, d) => sum + d, 0) + gaps.reduce((sum, g) => sum + g, 0);
 
-    let cursor = total / 2;
-    const offsets = depths.map((depth, index) => {
-      const centerZ = cursor - depth / 2;
-      const gap = index < gaps.length ? gaps[index] : 0;
-      cursor -= depth + gap;
-      return centerZ;
-    });
+    const offsets = depths.reduce(
+      ({ cursor, sheetOffsets }, depth, index) => {
+        const centerZ = cursor - depth / 2;
+        const gap = index < gaps.length ? gaps[index] : 0;
+        return {
+          cursor: cursor - depth - gap,
+          sheetOffsets: [...sheetOffsets, centerZ],
+        };
+      },
+      { cursor: total / 2, sheetOffsets: [] as number[] },
+    ).sheetOffsets;
 
     return { sheetZOffsets: offsets, totalStackDepth: total };
   }, [activePages]);
@@ -738,6 +975,28 @@ export const Book3D = ({ bookAtom: externalAtom, width = DEFAULT_PAGE_WIDTH, hei
     roughness: 0.95,
     metalness: 0.04,
   }), [customConnectorColor]);
+
+  useEffect(() => {
+    if (!Number.isFinite(textureLoadRadius)) {
+      return;
+    }
+
+    const radius = Math.max(0, Math.floor(textureLoadRadius));
+    const start = Math.max(0, sheetAnchorIndex - radius - 1);
+    const end = Math.min(activePages.length - 1, sheetAnchorIndex + radius + 1);
+    for (let i = start; i <= end; i += 1) {
+      const pageData = activePages[i];
+      if (!pageData) {
+        continue;
+      }
+      if (!pageData.front.startsWith("__")) {
+        useTexture.preload(`/textures/${pageData.front}.jpg`);
+      }
+      if (!pageData.back.startsWith("__")) {
+        useTexture.preload(`/textures/${pageData.back}.jpg`);
+      }
+    }
+  }, [activePages, sheetAnchorIndex, textureLoadRadius]);
 
   useEffect(() => {
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -796,17 +1055,41 @@ export const Book3D = ({ bookAtom: externalAtom, width = DEFAULT_PAGE_WIDTH, hei
     const targetConnectorRotation = (frontCoverRotation + backCoverRotation) * 0.5;
     const targetConnectorZ = -sheetZOffsets[sheetAnchorIndex];
 
+    const totalPages = activePages.length;
+
+    // Dynamic spine positioning and rotation
+    const normalizedPage = totalPages > 1 ? delayedPage / (totalPages - 1) : 0;
+    const balance = (normalizedPage - 0.5) * 2; // -1 (start) to 1 (end)
+    const spineOffset = balance * 0.002; // Slight shift to follow the "heavier" side
+    const spineRotationAmplitude = Math.PI / 6; // Angle range for dynamic rotation
+    const spineTilt = bookClosed ? 0 : -balance * spineRotationAmplitude;
+
     easing.dampAngle(
       coverConnectorRef.current.rotation,
       "y",
-      targetConnectorRotation,
-      0.45,
+      targetConnectorRotation + spineTilt,
+      1,
       delta,
     );
+
     easing.damp(
       coverConnectorRef.current.position,
       "z",
       targetConnectorZ,
+      0.35,
+      delta,
+    );
+    easing.damp(
+      coverConnectorRef.current.position,
+      "x",
+      COVER_CONNECTOR_X_OFFSET + spineOffset,
+      0.35,
+      delta,
+    );
+    easing.damp(
+      coverConnectorRef.current.position,
+      "y",
+      bookClosed ? 0 : 0.005,
       0.35,
       delta,
     );
@@ -816,15 +1099,10 @@ export const Book3D = ({ bookAtom: externalAtom, width = DEFAULT_PAGE_WIDTH, hei
     <group {...props} rotation-y={-Math.PI / 2}>
       <group>
         {activePages.map((pageData, index) => {
-          const isCover = index === 0 || index === activePages.length - 1;
           const zOffset = sheetZOffsets[index];
-
-          let renderFace = true;
-          if (bookClosed) {
-            if (index > 0 && index < activePages.length - 1) {
-              renderFace = false; // Optimization? No, keep it simple.
-            }
-          }
+          const isCover = index === 0 || index === activePages.length - 1;
+          const shouldUseTexturesForSheet = isCover
+            || Math.abs(sheetAnchorIndex - index) <= textureLoadRadius;
 
           return (
             <Page
@@ -839,9 +1117,18 @@ export const Book3D = ({ bookAtom: externalAtom, width = DEFAULT_PAGE_WIDTH, hei
               width={width}
               height={height}
               coverColor={coverColor}
+              coverFrontTexturePath={coverFrontTexturePath}
+              coverBackTexturePath={coverBackTexturePath}
+              coverFrontTextureOffsetY={coverFrontTextureOffsetY}
+              coverBackTextureOffsetY={coverBackTextureOffsetY}
               totalPages={activePages.length}
               zOffset={zOffset}
-              anchorZOffset={sheetZOffsets[sheetAnchorIndex]} // Pass anchor offset
+              anchorZOffset={sheetZOffsets[sheetAnchorIndex]}
+              texturesEnabled={shouldUseTexturesForSheet}
+              enableShadows={enableShadows}
+              contentEnabled={contentEnabled}
+              dynamicContent={dynamicContent}
+              fallbackMode={fallbackMode}
             />
           );
         })}

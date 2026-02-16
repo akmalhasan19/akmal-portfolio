@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
 const { NodeIO } = require('@gltf-transform/core');
 const io = new NodeIO();
 io.read('public/models/open_book/open_book.glb').then(doc => {
