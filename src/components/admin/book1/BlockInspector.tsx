@@ -247,8 +247,7 @@ export function BlockInspector({
                         <label className="text-[10px] uppercase text-neutral-600">
                             Font Family
                         </label>
-                        <input
-                            type="text"
+                        <select
                             value={selectedBlock.style.fontFamily}
                             onChange={(e) =>
                                 updateTextStyle(selectedBlock.id, {
@@ -256,7 +255,19 @@ export function BlockInspector({
                                 })
                             }
                             className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs outline-none focus:border-amber-500"
-                        />
+                        >
+                            <optgroup label="System">
+                                <option value="sans-serif">Sans Serif</option>
+                                <option value="serif">Serif</option>
+                                <option value="monospace">Monospace</option>
+                            </optgroup>
+                            <optgroup label="Project Fonts">
+                                <option value="var(--font-geist-sans)">Geist Sans</option>
+                                <option value="var(--font-geist-mono)">Geist Mono</option>
+                                <option value="var(--font-crimson-text)">Crimson Text (Serif)</option>
+                                <option value="var(--font-caveat)">Caveat (Handwriting)</option>
+                            </optgroup>
+                        </select>
                     </div>
                 </>
             )}

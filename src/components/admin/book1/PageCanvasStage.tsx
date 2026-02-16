@@ -262,8 +262,8 @@ export function PageCanvasStage({
                         <div
                             key={block.id}
                             className={`absolute cursor-move transition-shadow ${isSelected
-                                    ? "ring-2 ring-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.3)]"
-                                    : "hover:ring-1 hover:ring-neutral-400"
+                                ? "ring-2 ring-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.3)]"
+                                : "hover:ring-1 hover:ring-neutral-400"
                                 }`}
                             style={{
                                 left: `${left}%`,
@@ -273,6 +273,7 @@ export function PageCanvasStage({
                                 zIndex: block.zIndex,
                             }}
                             onPointerDown={(e) => handlePointerDown(e, block)}
+                            onClick={(e) => e.stopPropagation()}
                         >
                             {/* Block content preview */}
                             {block.type === "text" ? (
@@ -313,6 +314,7 @@ export function PageCanvasStage({
                                 <div
                                     className="absolute -bottom-1 -right-1 w-3 h-3 rounded-full bg-amber-400 cursor-se-resize border-2 border-neutral-900"
                                     onPointerDown={(e) => handleResizePointerDown(e, block)}
+                                    onClick={(e) => e.stopPropagation()}
                                 />
                             )}
                         </div>

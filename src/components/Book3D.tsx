@@ -402,7 +402,7 @@ interface PageProps extends GroupProps {
   enableShadows: boolean;
   contentEnabled?: boolean;
   dynamicContent?: DynamicTextureMap;
-  fallbackMode?: "legacy-texture" | "blank-white";
+
 }
 
 const Page = ({
@@ -427,7 +427,7 @@ const Page = ({
   enableShadows,
   contentEnabled,
   dynamicContent,
-  fallbackMode = "legacy-texture",
+
   ...props
 }: PageProps) => {
   const isCoverPage = number === 0 || number === totalPages - 1;
@@ -442,13 +442,8 @@ const Page = ({
     ? dynamicContent[pageSideKey(number, "back")]
     : undefined;
 
-  // When contentEnabled + blank-white fallback: don't load legacy textures for non-cover pages
-  const useLegacyFront = contentEnabled && fallbackMode === "blank-white"
-    ? false
-    : !front.startsWith("__");
-  const useLegacyBack = contentEnabled && fallbackMode === "blank-white"
-    ? false
-    : !back.startsWith("__");
+  const useLegacyFront = !front.startsWith("__");
+  const useLegacyBack = !back.startsWith("__");
 
   const hasFrontTexture = texturesEnabled && useLegacyFront && !dynamicFrontTexture;
   const hasBackTexture = texturesEnabled && useLegacyBack && !dynamicBackTexture;
@@ -665,7 +660,6 @@ const Page = ({
     : 0;
 
   useEffect(() => {
-    idleRef.current = false;
     settledFrameCount.current = 0;
   }, [bookClosed, highlighted, opened, page, totalPages]);
 
@@ -673,9 +667,7 @@ const Page = ({
     if (!skinnedMeshRef.current || !group.current) {
       return;
     }
-    if (idleRef.current && !highlighted) {
-      return;
-    }
+
 
     const materials = skinnedMeshRef.current.material as MeshStandardMaterial[];
     const emissiveIntensity = highlighted ? 0.22 : 0;
@@ -839,6 +831,8 @@ const Page = ({
       z: group.current.position.z,
     };
 
+    /*
+    // Removed idle check to prevent animation stuttering
     if (!highlighted && turningTime <= 0.001 && frameDelta < 0.00015) {
       settledFrameCount.current += 1;
       if (settledFrameCount.current > 24) {
@@ -847,6 +841,7 @@ const Page = ({
     } else {
       settledFrameCount.current = 0;
     }
+    */
   });
 
   return (
@@ -894,8 +889,7 @@ export interface Book3DProps extends GroupProps {
   contentEnabled?: boolean;
   /** Map of page-side keys to CanvasTextures. */
   dynamicContent?: DynamicTextureMap;
-  /** Fallback for pages without dynamic content. */
-  fallbackMode?: "legacy-texture" | "blank-white";
+
 }
 
 export const Book3D = ({
@@ -912,7 +906,7 @@ export const Book3D = ({
   enableShadows = true,
   contentEnabled,
   dynamicContent,
-  fallbackMode,
+
   ...props
 }: Book3DProps) => {
   const activeAtom = externalAtom ?? pageAtom;
@@ -1128,7 +1122,7 @@ export const Book3D = ({
               enableShadows={enableShadows}
               contentEnabled={contentEnabled}
               dynamicContent={dynamicContent}
-              fallbackMode={fallbackMode}
+
             />
           );
         })}

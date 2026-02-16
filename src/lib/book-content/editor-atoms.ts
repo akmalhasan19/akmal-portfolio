@@ -35,4 +35,4 @@ export const selectedBlockIdAtom = atom<string | null>(null);
 // This should match the number of interior pages in Book3D.
 // Cover pages are excluded — this is only for interior page indices.
 
-export const totalInteriorPagesAtom = atom(16);
+export const totalInteriorPagesAtom = atom(18);

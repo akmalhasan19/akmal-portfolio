@@ -17,6 +17,7 @@ import {
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import { Book3D, createBookAtom } from './Book3D';
 import { CoffeeSteam } from './CoffeeSteam';
+
 import { useBookSideTextures } from '@/lib/book-content/useBookSideTextures';
 
 interface ModelProps {
@@ -33,8 +34,8 @@ const BOOK_ROTATION_DEG: [number, number, number] = [90, 180, 0];
 const BOOK_SCALE = 0.5;
 
 // Second book transform
-const BOOK2_POSITION: [number, number, number] = [1.2, -0.06, 0.5];
-const BOOK2_ROTATION_DEG: [number, number, number] = [90, 180, 200];
+const BOOK2_POSITION: [number, number, number] = [1.3, -0.06, 0.4];
+const BOOK2_ROTATION_DEG: [number, number, number] = [90, 180, 230];
 const BOOK2_SCALE = 0.45;
 const LAMP_POSITION: [number, number, number] = [-1.2, -0.15, 0.01];
 const LAMP_ROTATION: [number, number, number] = [0, 1.55, 0];
@@ -43,7 +44,9 @@ const LAMP_BULB_POSITION: [number, number, number] = [-1.1, 1.4, 0];
 const LAMP_REFLECTOR_POSITION: [number, number, number] = [-0.6, 0.65, 0.2];
 const LAMP_TARGET_POSITION: [number, number, number] = [-0.55, -0.5, 0.2];
 
-const bookAtom = createBookAtom(4);
+
+
+const bookAtom = createBookAtom(0);
 const book2Atom = createBookAtom(4);
 
 // Reusing textures from Book3D for generated second-book pages.
@@ -219,7 +222,7 @@ function DeskLampModel({ scale, position, rotation = [0, 0, 0], lightsOn, enable
         return;
       }
 
-      mesh.castShadow = enableShadows;
+      mesh.castShadow = false;
       mesh.receiveShadow = enableShadows;
 
       // Initial material tuning
@@ -342,7 +345,7 @@ export default function Hero() {
             : 'bg-white/5 border-white/10 text-gray-400 hover:bg-white/10'
             }`}
         >
-          {lightsOn ? 'Turn Lights Off' : 'Turn Lights On'}
+          {lightsOn ? 'Turn Room Lights Off' : 'Turn Room Lights On'}
         </button>
       </div>
 
@@ -370,22 +373,24 @@ export default function Hero() {
       >
         <color attach="background" args={['#101010']} />
 
+        <ambientLight intensity={lightsOn ? 0.5 : 0} />
+
         <object3D ref={lampTargetRef} position={LAMP_TARGET_POSITION} />
 
         <SpotLight
           ref={lampSpotRef}
           position={LAMP_BULB_POSITION}
           color="#ffddaa"
-          intensity={lightsOn ? 8 : 0}
+          intensity={8}
           angle={0.9}
           penumbra={0.7}
           distance={5}
           decay={2}
           attenuation={5}
           anglePower={4}
-          opacity={lightsOn ? 0.03 : 0}
-          volumetric={sceneProfile.enableVolumetricLight && lightsOn}
-          castShadow={sceneProfile.enableShadows && lightsOn}
+          opacity={0.03}
+          volumetric={sceneProfile.enableVolumetricLight}
+          castShadow={sceneProfile.enableShadows}
           shadow-mapSize-width={sceneProfile.shadowMapSize}
           shadow-mapSize-height={sceneProfile.shadowMapSize}
           shadow-camera-near={0.05}
@@ -398,7 +403,7 @@ export default function Hero() {
         <pointLight
           position={LAMP_REFLECTOR_POSITION}
           color="#ffd9a8"
-          intensity={lightsOn ? 4 : 0}
+          intensity={1}
           distance={6.5}
           decay={2}
         />
@@ -415,7 +420,7 @@ export default function Hero() {
             position={LAMP_POSITION}
             scale={LAMP_SCALE}
             rotation={LAMP_ROTATION}
-            lightsOn={lightsOn}
+            lightsOn={true}
             enableShadows={sceneProfile.enableShadows}
           />
 
@@ -438,7 +443,7 @@ export default function Hero() {
               textureLoadRadius={sceneProfile.bookTextureLoadRadius}
               contentEnabled={true}
               dynamicContent={book1DynamicContent}
-              fallbackMode="blank-white"
+
             />
           </group>
 
@@ -461,6 +466,8 @@ export default function Hero() {
               />
             </group>
           )}
+
+
 
           <CoffeeMug
             steamEnabled={sceneProfile.renderSteam}
