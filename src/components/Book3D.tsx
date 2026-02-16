@@ -43,7 +43,7 @@ const COVER_DEPTH_SEGMENTS = 14;
 const COVER_CORNER_RADIUS = 0.045;
 const COVER_CONNECTOR_HEIGHT_TRIM = 0.001;
 const COVER_CONNECTOR_RADIUS_SCALE = 0.5;
-const COVER_CONNECTOR_X_OFFSET = -0.06;
+const COVER_CONNECTOR_X_OFFSET = -0.14;
 const TAU = Math.PI * 2;
 const ANGLE_EPSILON = 1e-5;
 const MAX_DIRECTIONAL_TURN = Math.PI - MathUtils.degToRad(2);
@@ -425,6 +425,8 @@ interface PageProps extends GroupProps {
   enableShadows: boolean;
   contentEnabled?: boolean;
   dynamicContent?: DynamicTextureMap;
+  /** Controls max fan spread for books with >20 page entries. */
+  largeBookFanSpreadDeg?: number;
 
 }
 
@@ -450,6 +452,7 @@ const Page = ({
   enableShadows,
   contentEnabled,
   dynamicContent,
+  largeBookFanSpreadDeg,
 
   ...props
 }: PageProps) => {
@@ -737,8 +740,9 @@ const Page = ({
     } else if (!bookClosed) {
       const leftRank = Math.max(0, page - number);
       const rightRank = Math.max(0, number - page);
+      const largeBookFanSpread = Math.max(2, largeBookFanSpreadDeg ?? 30);
       const effectiveFanStep = totalPages > 20
-        ? MathUtils.degToRad(30 / totalPages)
+        ? MathUtils.degToRad(largeBookFanSpread / Math.max(1, totalPages - 2))
         : (opened ? RIGHT_STACK_FAN_STEP : LEFT_STACK_FAN_STEP);
 
       targetRotation = opened
@@ -931,6 +935,8 @@ export interface Book3DProps extends GroupProps {
   contentEnabled?: boolean;
   /** Map of page-side keys to CanvasTextures. */
   dynamicContent?: DynamicTextureMap;
+  /** Controls max fan spread for books with >20 page entries. */
+  largeBookFanSpreadDeg?: number;
 
 }
 
@@ -948,6 +954,7 @@ export const Book3D = ({
   enableShadows = true,
   contentEnabled,
   dynamicContent,
+  largeBookFanSpreadDeg,
 
   ...props
 }: Book3DProps) => {
@@ -1164,6 +1171,7 @@ export const Book3D = ({
               enableShadows={enableShadows}
               contentEnabled={contentEnabled}
               dynamicContent={dynamicContent}
+              largeBookFanSpreadDeg={largeBookFanSpreadDeg}
 
             />
           );

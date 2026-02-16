@@ -53,7 +53,7 @@ export default function AdminLoginPage() {
                 return;
             }
 
-            router.push("/admin/book-1");
+            router.push("/admin");
         } catch {
             setError("Terjadi kesalahan. Coba lagi.");
             setLoading(false);

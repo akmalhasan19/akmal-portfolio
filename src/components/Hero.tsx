@@ -34,7 +34,7 @@ const BOOK_ROTATION_DEG: [number, number, number] = [90, 180, 0];
 const BOOK_SCALE = 0.5;
 
 // Second book transform
-const BOOK2_POSITION: [number, number, number] = [1.3, -0.06, 0.4];
+const BOOK2_POSITION: [number, number, number] = [1.3, -0.01, 0.4];
 const BOOK2_ROTATION_DEG: [number, number, number] = [90, 180, 230];
 const BOOK2_SCALE = 0.45;
 const LAMP_POSITION: [number, number, number] = [-1.2, -0.15, 0.01];
@@ -47,7 +47,7 @@ const LAMP_TARGET_POSITION: [number, number, number] = [-0.55, -0.5, 0.2];
 
 
 const bookAtom = createBookAtom(0);
-const book2Atom = createBookAtom(4);
+const book2Atom = createBookAtom(0);
 
 // Reusing textures from Book3D for generated second-book pages.
 const pictures = [
@@ -327,6 +327,15 @@ export default function Hero() {
     enabled: true,
   });
 
+  // Dynamic content for Book 2
+  const book2DynamicContent = useBookSideTextures({
+    bookKey: "book-2",
+    totalPageEntries: book2Pages.length + 2, // interior sheets + 2 covers
+    canvasHeight: isLowEndDevice ? 1024 : 1536,
+    textureLoadRadius: sceneProfile.bookTextureLoadRadius,
+    enabled: sceneProfile.renderSecondBook,
+  });
+
   useEffect(() => {
     if (!lampTargetRef.current || !lampSpotRef.current) {
       return;
@@ -463,6 +472,9 @@ export default function Hero() {
                 coverColor="#1a4a2e"
                 enableShadows={sceneProfile.enableShadows}
                 textureLoadRadius={sceneProfile.bookTextureLoadRadius}
+                contentEnabled={true}
+                dynamicContent={book2DynamicContent}
+                largeBookFanSpreadDeg={8}
               />
             </group>
           )}
