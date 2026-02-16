@@ -105,6 +105,34 @@ export async function uploadPageAsset(
 }
 
 /**
+ * Uploads a profile image for a book to Supabase Storage.
+ *
+ * @returns The public URL of the uploaded profile image.
+ */
+export async function uploadBookProfileAsset(
+    supabase: SupabaseClient,
+    bookKey: BookKey,
+    blob: Blob,
+): Promise<string> {
+    const timestamp = Date.now();
+    const path = `${bookKey}/profile/avatar-${timestamp}.webp`;
+
+    const { error: uploadError } = await supabase.storage
+        .from(STORAGE_BUCKET)
+        .upload(path, blob, {
+            contentType: "image/webp",
+            upsert: true,
+        });
+
+    if (uploadError) {
+        throw new Error(`Upload gagal: ${uploadError.message}`);
+    }
+
+    const { data } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(path);
+    return data.publicUrl;
+}
+
+/**
  * Deletes a previously uploaded asset from Supabase Storage.
  */
 export async function deletePageAsset(

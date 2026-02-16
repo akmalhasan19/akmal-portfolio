@@ -21,6 +21,7 @@
     "next": "16.1.6",
     "react": "19.2.3",
     "react-dom": "19.2.3",
+    "react-image-crop": "^11.0.10",
     "three": "^0.182.0"
   },
   "devDependencies": {

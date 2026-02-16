@@ -19,6 +19,7 @@ import { Book3D, createBookAtom } from './Book3D';
 import { CoffeeSteam } from './CoffeeSteam';
 
 import { useBookSideTextures } from '@/lib/book-content/useBookSideTextures';
+import { useBookProfileImage } from '@/lib/book-content/useBookProfileImage';
 
 interface ModelProps {
   path: string;
@@ -335,6 +336,10 @@ export default function Hero() {
     textureLoadRadius: sceneProfile.bookTextureLoadRadius,
     enabled: sceneProfile.renderSecondBook,
   });
+  const book2ProfileImageUrl = useBookProfileImage({
+    bookKey: "book-2",
+    enabled: sceneProfile.renderSecondBook,
+  });
 
   useEffect(() => {
     if (!lampTargetRef.current || !lampSpotRef.current) {
@@ -474,6 +479,7 @@ export default function Hero() {
                 textureLoadRadius={sceneProfile.bookTextureLoadRadius}
                 contentEnabled={true}
                 dynamicContent={book2DynamicContent}
+                frontCoverAvatarUrl={book2ProfileImageUrl ?? undefined}
                 largeBookFanSpreadDeg={8}
               />
             </group>

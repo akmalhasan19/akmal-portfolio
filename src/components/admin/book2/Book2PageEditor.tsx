@@ -18,6 +18,7 @@ import { validateLayout } from "@/lib/book-content/validation";
 import { PageNavigator } from "./PageNavigator";
 import { PageCanvasStage } from "./PageCanvasStage";
 import { BlockInspector } from "./BlockInspector";
+import { Book2ProfileImageUploader } from "./Book2ProfileImageUploader";
 
 const AUTOSAVE_DEBOUNCE_MS = 600;
 const BOOK_KEY = "book-2";
@@ -174,6 +175,8 @@ export function Book2PageEditor() {
                         </span>
                     )}
                 </div>
+
+                <Book2ProfileImageUploader />
 
                 <button
                     onClick={() => window.open("/", "_blank")}

@@ -44,6 +44,8 @@ const COVER_CORNER_RADIUS = 0.045;
 const COVER_CONNECTOR_HEIGHT_TRIM = 0.001;
 const COVER_CONNECTOR_RADIUS_SCALE = 0.5;
 const COVER_CONNECTOR_X_OFFSET = -0.14;
+const COVER_CONNECTOR_Y_OFFSET = 0;
+const COVER_CONNECTOR_Z_OFFSET = 0.05;
 const TAU = Math.PI * 2;
 const ANGLE_EPSILON = 1e-5;
 const MAX_DIRECTIONAL_TURN = Math.PI - MathUtils.degToRad(2);
@@ -416,6 +418,7 @@ interface PageProps extends GroupProps {
   coverColor?: string;
   coverFrontTexturePath?: string;
   coverBackTexturePath?: string;
+  frontCoverAvatarUrl?: string;
   coverFrontTextureOffsetY?: number;
   coverBackTextureOffsetY?: number;
   totalPages: number;
@@ -443,6 +446,7 @@ const Page = ({
   coverColor,
   coverFrontTexturePath,
   coverBackTexturePath,
+  frontCoverAvatarUrl,
   coverFrontTextureOffsetY,
   coverBackTextureOffsetY,
   totalPages,
@@ -475,11 +479,13 @@ const Page = ({
   const hasBackTexture = texturesEnabled && useLegacyBack && !dynamicBackTexture;
   const activeCoverFrontTexturePath = isFrontCover ? coverFrontTexturePath : undefined;
   const activeCoverBackTexturePath = isBackCover ? coverBackTexturePath : undefined;
+  const activeCoverAvatarPath = isFrontCover ? frontCoverAvatarUrl : undefined;
   const texturePaths = [
     ...(hasFrontTexture ? [`/textures/${front}.jpg`] : []),
     ...(hasBackTexture ? [`/textures/${back}.jpg`] : []),
     ...(activeCoverFrontTexturePath ? [activeCoverFrontTexturePath] : []),
     ...(activeCoverBackTexturePath ? [activeCoverBackTexturePath] : []),
+    ...(activeCoverAvatarPath ? [activeCoverAvatarPath] : []),
   ];
 
   const loadedTextures = useTexture(
@@ -501,6 +507,9 @@ const Page = ({
     ? loadedTextures[textureIndex++]
     : undefined;
   const coverBackTexture = activeCoverBackTexturePath
+    ? loadedTextures[textureIndex++]
+    : undefined;
+  const coverAvatarTexture = activeCoverAvatarPath
     ? loadedTextures[textureIndex]
     : undefined;
 
@@ -527,6 +536,10 @@ const Page = ({
     texture.needsUpdate = true;
     return texture;
   }, [coverBackTexture, coverBackTextureOffsetY]);
+
+  const avatarCircleRadius = (width + COVER_OVERHANG_X) * 0.18;
+  const avatarCenterX = (width + COVER_OVERHANG_X) * 0.5;
+  const avatarSurfaceZ = COVER_DEPTH * 0.5 + 0.0014;
 
   const group = useRef<Group | null>(null);
   const turnedAt = useRef(0);
@@ -915,6 +928,21 @@ const Page = ({
         position-y={stackSettleY}
         position-z={relativeSheetZ + stackSettleZ + coverSurfaceGuard}
       />
+      {isFrontCover && coverAvatarTexture ? (
+        <mesh
+          position-x={avatarCenterX}
+          position-y={stackSettleY}
+          position-z={relativeSheetZ + stackSettleZ + coverSurfaceGuard + avatarSurfaceZ}
+        >
+          <circleGeometry args={[avatarCircleRadius, 64]} />
+          <meshStandardMaterial
+            map={coverAvatarTexture}
+            color={whiteColor}
+            roughness={0.72}
+            metalness={0.02}
+          />
+        </mesh>
+      ) : null}
     </group>
   );
 };
@@ -926,6 +954,7 @@ export interface Book3DProps extends GroupProps {
   coverColor?: string;
   coverFrontTexturePath?: string;
   coverBackTexturePath?: string;
+  frontCoverAvatarUrl?: string;
   coverFrontTextureOffsetY?: number;
   coverBackTextureOffsetY?: number;
   pages?: PageData[];
@@ -947,6 +976,7 @@ export const Book3D = ({
   coverColor,
   coverFrontTexturePath,
   coverBackTexturePath,
+  frontCoverAvatarUrl,
   coverFrontTextureOffsetY,
   coverBackTextureOffsetY,
   pages: customPages,
@@ -1118,7 +1148,7 @@ export const Book3D = ({
     easing.damp(
       coverConnectorRef.current.position,
       "z",
-      targetConnectorZ,
+      targetConnectorZ + COVER_CONNECTOR_Z_OFFSET,
       0.35,
       delta,
     );
@@ -1132,7 +1162,7 @@ export const Book3D = ({
     easing.damp(
       coverConnectorRef.current.position,
       "y",
-      bookClosed ? 0 : 0.005,
+      (bookClosed ? 0 : 0.005) + COVER_CONNECTOR_Y_OFFSET,
       0.35,
       delta,
     );
@@ -1162,6 +1192,7 @@ export const Book3D = ({
               coverColor={coverColor}
               coverFrontTexturePath={coverFrontTexturePath}
               coverBackTexturePath={coverBackTexturePath}
+              frontCoverAvatarUrl={frontCoverAvatarUrl}
               coverFrontTextureOffsetY={coverFrontTextureOffsetY}
               coverBackTextureOffsetY={coverBackTextureOffsetY}
               totalPages={activePages.length}
@@ -1182,6 +1213,8 @@ export const Book3D = ({
         geometry={coverConnectorGeometry}
         material={coverConnectorMaterial}
         position-x={COVER_CONNECTOR_X_OFFSET}
+        position-y={COVER_CONNECTOR_Y_OFFSET}
+        position-z={COVER_CONNECTOR_Z_OFFSET}
       />
     </group>
   );
