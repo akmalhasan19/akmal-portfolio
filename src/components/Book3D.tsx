@@ -6,7 +6,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bone,
   BoxGeometry,
-  CanvasTexture,
   ClampToEdgeWrapping,
   Color,
   CylinderGeometry,
@@ -430,6 +429,10 @@ interface PageProps extends GroupProps {
   dynamicContent?: DynamicTextureMap;
   /** Controls max fan spread for books with >20 page entries. */
   largeBookFanSpreadDeg?: number;
+  /** Optional click interceptor from parent scene. Return true to consume click. */
+  onBookClick?: () => boolean;
+  /** Disable page interactions while parent runs scene-level animation. */
+  interactionDisabled?: boolean;
 
 }
 
@@ -457,6 +460,8 @@ const Page = ({
   contentEnabled,
   dynamicContent,
   largeBookFanSpreadDeg,
+  onBookClick,
+  interactionDisabled = false,
 
   ...props
 }: PageProps) => {
@@ -546,7 +551,6 @@ const Page = ({
   const lastOpened = useRef(opened);
   const turnDirection = useRef<1 | -1>(opened ? 1 : -1);
   const skinnedMeshRef = useRef<SkinnedMesh | null>(null);
-  const idleRef = useRef(false);
   const settledFrameCount = useRef(0);
   const lastFrameState = useRef({
     rootY: opened ? -Math.PI / 2 : Math.PI / 2,
@@ -657,8 +661,6 @@ const Page = ({
     mesh.bind(skeleton);
     return mesh;
   }, [
-    hasBackTexture,
-    hasFrontTexture,
     isBackCover,
     isFrontCover,
     isCoverPage,
@@ -879,11 +881,6 @@ const Page = ({
       return;
     }
 
-    const frameDelta =
-      Math.abs(normalizeAngleDelta(rootBone.rotation.y - lastFrameState.current.rootY)) +
-      Math.abs(group.current.position.y - lastFrameState.current.y) +
-      Math.abs(group.current.position.z - lastFrameState.current.z);
-
     lastFrameState.current = {
       rootY: rootBone.rotation.y,
       y: group.current.position.y,
@@ -909,6 +906,9 @@ const Page = ({
       ref={group}
       onPointerEnter={(event) => {
         event.stopPropagation();
+        if (interactionDisabled) {
+          return;
+        }
         setHighlighted(true);
       }}
       onPointerLeave={(event) => {
@@ -917,6 +917,15 @@ const Page = ({
       }}
       onClick={(event) => {
         event.stopPropagation();
+        if (interactionDisabled) {
+          setHighlighted(false);
+          return;
+        }
+        const clickHandledByParent = onBookClick?.() ?? false;
+        if (clickHandledByParent) {
+          setHighlighted(false);
+          return;
+        }
         setPage(opened ? number : number + 1);
         setHighlighted(false);
       }}
@@ -966,6 +975,10 @@ export interface Book3DProps extends GroupProps {
   dynamicContent?: DynamicTextureMap;
   /** Controls max fan spread for books with >20 page entries. */
   largeBookFanSpreadDeg?: number;
+  /** Optional click interceptor from parent scene. Return true to consume click. */
+  onBookClick?: () => boolean;
+  /** Disable page interactions while parent runs scene-level animation. */
+  interactionDisabled?: boolean;
 
 }
 
@@ -985,6 +998,8 @@ export const Book3D = ({
   contentEnabled,
   dynamicContent,
   largeBookFanSpreadDeg,
+  onBookClick,
+  interactionDisabled = false,
 
   ...props
 }: Book3DProps) => {
@@ -1203,6 +1218,8 @@ export const Book3D = ({
               contentEnabled={contentEnabled}
               dynamicContent={dynamicContent}
               largeBookFanSpreadDeg={largeBookFanSpreadDeg}
+              onBookClick={onBookClick}
+              interactionDisabled={interactionDisabled}
 
             />
           );

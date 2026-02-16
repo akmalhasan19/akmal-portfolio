@@ -1,4 +1,4 @@
-import type { PageSideLayout, LayoutBlock, ImageBlock, TextBlock } from "@/types/book-content";
+import type { PageSideLayout, ImageBlock, TextBlock } from "@/types/book-content";
 import { computeSafeArea } from "./padding";
 
 // ── Constants ────────────────────────────────
@@ -33,8 +33,6 @@ function wrapText(
     ctx: CanvasRenderingContext2D,
     text: string,
     maxWidth: number,
-    lineHeight: number,
-    fontSize: number,
 ): string[] {
     const lines: string[] = [];
     const paragraphs = text.split("\n");
@@ -96,7 +94,7 @@ function drawTextBlock(
     ctx.textBaseline = "top";
 
     const linePixelHeight = fontSize * lineHeight;
-    const wrappedLines = wrapText(ctx, block.content, w, lineHeight, fontSize);
+    const wrappedLines = wrapText(ctx, block.content, w);
 
     for (let i = 0; i < wrappedLines.length; i++) {
         const lineY = y + i * linePixelHeight;

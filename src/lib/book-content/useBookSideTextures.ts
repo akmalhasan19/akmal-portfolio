@@ -62,13 +62,14 @@ export function useBookSideTextures({
     // Cleanup on unmount
     useEffect(() => {
         mountedRef.current = true;
+        const textureCache = textureCacheRef.current;
         return () => {
             mountedRef.current = false;
             // Dispose all textures
-            for (const texture of textureCacheRef.current.values()) {
+            for (const texture of textureCache.values()) {
                 texture.dispose();
             }
-            textureCacheRef.current.clear();
+            textureCache.clear();
         };
     }, []);
 

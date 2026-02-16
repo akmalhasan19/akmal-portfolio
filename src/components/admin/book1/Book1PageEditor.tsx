@@ -38,7 +38,10 @@ export function Book1PageEditor() {
 
     const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const latestLayoutRef = useRef(layout);
-    latestLayoutRef.current = layout;
+
+    useEffect(() => {
+        latestLayoutRef.current = layout;
+    }, [layout]);
 
     // ── Fetch layout on page/side change ───────
     useEffect(() => {

@@ -3,7 +3,6 @@
 import { useAtomValue } from "jotai";
 import { selectedBlockIdAtom } from "@/lib/book-content/editor-atoms";
 import type {
-    LayoutBlock,
     PageSideLayout,
     TextBlock,
 } from "@/types/book-content";

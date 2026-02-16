@@ -1,11 +1,12 @@
 'use client';
 
-import React, { Suspense, useEffect, useMemo, useRef } from 'react';
-import { Canvas, useThree, ThreeElements } from '@react-three/fiber';
+import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Canvas, useFrame, useThree, ThreeElements } from '@react-three/fiber';
 import { OrbitControls, SpotLight, useDetectGPU, useGLTF } from '@react-three/drei';
 import { Bloom, EffectComposer, Vignette } from '@react-three/postprocessing';
 import {
   ACESFilmicToneMapping,
+  Group,
   MathUtils,
   Mesh,
   MeshStandardMaterial,
@@ -30,14 +31,28 @@ interface ModelProps {
 }
 
 // Edit transform buku dari sini.
-const BOOK_POSITION: [number, number, number] = [0, -0.06, -0.01];
+const BOOK_POSITION: [number, number, number] = [0.5, -0.06, -0.01];
 const BOOK_ROTATION_DEG: [number, number, number] = [90, 180, 0];
 const BOOK_SCALE = 0.5;
 
 // Second book transform
-const BOOK2_POSITION: [number, number, number] = [1.3, -0.01, 0.4];
+const BOOK2_POSITION: [number, number, number] = [1.3, -0.01, 0.9];
 const BOOK2_ROTATION_DEG: [number, number, number] = [90, 180, 230];
 const BOOK2_SCALE = 0.45;
+const BOOK_ROTATION_RAD: [number, number, number] = [
+  MathUtils.degToRad(BOOK_ROTATION_DEG[0]),
+  MathUtils.degToRad(BOOK_ROTATION_DEG[1]),
+  MathUtils.degToRad(BOOK_ROTATION_DEG[2]),
+];
+const BOOK2_ROTATION_RAD: [number, number, number] = [
+  MathUtils.degToRad(BOOK2_ROTATION_DEG[0]),
+  MathUtils.degToRad(BOOK2_ROTATION_DEG[1]),
+  MathUtils.degToRad(BOOK2_ROTATION_DEG[2]),
+];
+const BOOK_SWAP_DURATION_MS = 2000;
+const BOOK_SWAP_LIFT = 0.48;
+const BOOK_SWAP_VERTICAL_SWING_RAD = MathUtils.degToRad(36);
+const BOOK_SWAP_ROLL_SWING_RAD = MathUtils.degToRad(5);
 const LAMP_POSITION: [number, number, number] = [-1.2, -0.15, 0.01];
 const LAMP_ROTATION: [number, number, number] = [0, 1.55, 0];
 const LAMP_SCALE = 3.8;
@@ -112,6 +127,36 @@ const SCENE_PROFILES: Record<SceneProfile["name"], SceneProfile> = {
     renderPlant: true,
     bookTextureLoadRadius: Number.POSITIVE_INFINITY,
   },
+};
+
+type BookId = 'book1' | 'book2';
+type BookSlot = 'lamp' | 'side';
+
+interface BookSlotTransform {
+  position: [number, number, number];
+  rotation: [number, number, number];
+  scale: number;
+}
+
+const BOOK_SLOT_TRANSFORMS: Record<BookSlot, BookSlotTransform> = {
+  lamp: {
+    position: BOOK_POSITION,
+    rotation: BOOK_ROTATION_RAD,
+    scale: BOOK_SCALE,
+  },
+  side: {
+    position: BOOK2_POSITION,
+    rotation: BOOK2_ROTATION_RAD,
+    scale: BOOK2_SCALE,
+  },
+};
+
+const lerp = (start: number, end: number, alpha: number) => start + (end - start) * alpha;
+
+const setGroupTransform = (group: Group, transform: BookSlotTransform) => {
+  group.position.set(...transform.position);
+  group.rotation.set(...transform.rotation);
+  group.scale.setScalar(transform.scale);
 };
 
 function ShiftTrackpadMove({
@@ -303,6 +348,178 @@ function CoffeeMug({ steamEnabled, enableShadows, ...props }: CoffeeMugProps) {
   );
 }
 
+interface InteractiveBooksProps {
+  renderSecondBook: boolean;
+  enableShadows: boolean;
+  textureLoadRadius: number;
+  book2Pages: Array<{ front: string; back: string }>;
+  book1DynamicContent: ReturnType<typeof useBookSideTextures>;
+  book2DynamicContent: ReturnType<typeof useBookSideTextures>;
+  book2ProfileImageUrl: string | null;
+}
+
+function InteractiveBooks({
+  renderSecondBook,
+  enableShadows,
+  textureLoadRadius,
+  book2Pages,
+  book1DynamicContent,
+  book2DynamicContent,
+  book2ProfileImageUrl,
+}: InteractiveBooksProps) {
+  const book1GroupRef = useRef<Group | null>(null);
+  const book2GroupRef = useRef<Group | null>(null);
+  const spotlightBookRef = useRef<BookId>('book1');
+  const swapAnimationRef = useRef<{ startedAtMs: number; spotlightBeforeSwap: BookId } | null>(null);
+  const [isSwapping, setIsSwapping] = useState(false);
+
+  const getSlotForBook = useCallback(
+    (bookId: BookId, spotlightBook: BookId): BookSlot => (
+      bookId === spotlightBook ? 'lamp' : 'side'
+    ),
+    [],
+  );
+
+  const handleBookClick = useCallback((bookId: BookId) => {
+    if (!renderSecondBook) {
+      return false;
+    }
+    if (swapAnimationRef.current) {
+      return true;
+    }
+
+    const currentSpotlightBook = spotlightBookRef.current;
+    if (bookId === currentSpotlightBook) {
+      return false;
+    }
+
+    swapAnimationRef.current = {
+      startedAtMs: performance.now(),
+      spotlightBeforeSwap: currentSpotlightBook,
+    };
+    setIsSwapping(true);
+    return true;
+  }, [renderSecondBook]);
+
+  useFrame(() => {
+    const book1Group = book1GroupRef.current;
+    if (!book1Group) {
+      return;
+    }
+
+    if (!renderSecondBook) {
+      setGroupTransform(book1Group, BOOK_SLOT_TRANSFORMS.lamp);
+      return;
+    }
+
+    const book2Group = book2GroupRef.current;
+    if (!book2Group) {
+      return;
+    }
+
+    const swapAnimation = swapAnimationRef.current;
+    if (!swapAnimation) {
+      const book1Slot = getSlotForBook('book1', spotlightBookRef.current);
+      const book2Slot = getSlotForBook('book2', spotlightBookRef.current);
+      setGroupTransform(book1Group, BOOK_SLOT_TRANSFORMS[book1Slot]);
+      setGroupTransform(book2Group, BOOK_SLOT_TRANSFORMS[book2Slot]);
+      return;
+    }
+
+    const rawProgress = MathUtils.clamp(
+      (performance.now() - swapAnimation.startedAtMs) / BOOK_SWAP_DURATION_MS,
+      0,
+      1,
+    );
+    const easedProgress = MathUtils.smootherstep(rawProgress, 0, 1);
+    const inAirFactor = Math.sin(Math.PI * easedProgress);
+
+    const applySwapPose = (bookId: BookId, group: Group) => {
+      const startSlot = getSlotForBook(bookId, swapAnimation.spotlightBeforeSwap);
+      const endSlot: BookSlot = startSlot === 'lamp' ? 'side' : 'lamp';
+      const startTransform = BOOK_SLOT_TRANSFORMS[startSlot];
+      const endTransform = BOOK_SLOT_TRANSFORMS[endSlot];
+      const moveDirection = startSlot === 'side' ? 1 : -1;
+
+      group.position.set(
+        lerp(startTransform.position[0], endTransform.position[0], easedProgress),
+        lerp(startTransform.position[1], endTransform.position[1], easedProgress) + inAirFactor * BOOK_SWAP_LIFT,
+        lerp(startTransform.position[2], endTransform.position[2], easedProgress),
+      );
+
+      group.rotation.set(
+        lerp(startTransform.rotation[0], endTransform.rotation[0], easedProgress)
+        + inAirFactor * BOOK_SWAP_VERTICAL_SWING_RAD * moveDirection,
+        lerp(startTransform.rotation[1], endTransform.rotation[1], easedProgress),
+        lerp(startTransform.rotation[2], endTransform.rotation[2], easedProgress)
+        + inAirFactor * BOOK_SWAP_ROLL_SWING_RAD * moveDirection,
+      );
+
+      const scale =
+        lerp(startTransform.scale, endTransform.scale, easedProgress)
+        * (1 + inAirFactor * 0.08);
+      group.scale.setScalar(scale);
+    };
+
+    applySwapPose('book1', book1Group);
+    applySwapPose('book2', book2Group);
+
+    if (rawProgress >= 1) {
+      spotlightBookRef.current = swapAnimation.spotlightBeforeSwap === 'book1' ? 'book2' : 'book1';
+      swapAnimationRef.current = null;
+      setIsSwapping(false);
+    }
+  });
+
+  return (
+    <>
+      <group
+        ref={book1GroupRef}
+        position={BOOK_POSITION}
+        scale={BOOK_SCALE}
+        rotation={BOOK_ROTATION_RAD}
+      >
+        <Book3D
+          bookAtom={bookAtom}
+          coverColor="#4a3020"
+          coverFrontTexturePath="/textures/book1-cover-front.png"
+          coverBackTexturePath="/textures/book1-cover-back.png"
+          coverFrontTextureOffsetY={0}
+          enableShadows={enableShadows}
+          textureLoadRadius={textureLoadRadius}
+          contentEnabled={true}
+          dynamicContent={book1DynamicContent}
+          onBookClick={() => handleBookClick('book1')}
+          interactionDisabled={isSwapping}
+        />
+      </group>
+
+      {renderSecondBook && (
+        <group
+          ref={book2GroupRef}
+          position={BOOK2_POSITION}
+          scale={BOOK2_SCALE}
+          rotation={BOOK2_ROTATION_RAD}
+        >
+          <Book3D
+            bookAtom={book2Atom}
+            pages={book2Pages}
+            coverColor="#1a4a2e"
+            enableShadows={enableShadows}
+            textureLoadRadius={textureLoadRadius}
+            contentEnabled={true}
+            dynamicContent={book2DynamicContent}
+            frontCoverAvatarUrl={book2ProfileImageUrl ?? undefined}
+            largeBookFanSpreadDeg={8}
+            onBookClick={() => handleBookClick('book2')}
+            interactionDisabled={isSwapping}
+          />
+        </group>
+      )}
+    </>
+  );
+}
+
 export default function Hero() {
   const [lightsOn, setLightsOn] = React.useState(true);
   const controlsRef = useRef<OrbitControlsImpl | null>(null);
@@ -438,52 +655,15 @@ export default function Hero() {
             enableShadows={sceneProfile.enableShadows}
           />
 
-          <group
-            position={BOOK_POSITION}
-            scale={BOOK_SCALE}
-            rotation={[
-              MathUtils.degToRad(BOOK_ROTATION_DEG[0]),
-              MathUtils.degToRad(BOOK_ROTATION_DEG[1]),
-              MathUtils.degToRad(BOOK_ROTATION_DEG[2]),
-            ]}
-          >
-            <Book3D
-              bookAtom={bookAtom}
-              coverColor="#4a3020"
-              coverFrontTexturePath="/textures/book1-cover-front.png"
-              coverBackTexturePath="/textures/book1-cover-back.png"
-              coverFrontTextureOffsetY={0}
-              enableShadows={sceneProfile.enableShadows}
-              textureLoadRadius={sceneProfile.bookTextureLoadRadius}
-              contentEnabled={true}
-              dynamicContent={book1DynamicContent}
-
-            />
-          </group>
-
-          {sceneProfile.renderSecondBook && (
-            <group
-              position={BOOK2_POSITION}
-              scale={BOOK2_SCALE}
-              rotation={[
-                MathUtils.degToRad(BOOK2_ROTATION_DEG[0]),
-                MathUtils.degToRad(BOOK2_ROTATION_DEG[1]),
-                MathUtils.degToRad(BOOK2_ROTATION_DEG[2]),
-              ]}
-            >
-              <Book3D
-                bookAtom={book2Atom}
-                pages={book2Pages}
-                coverColor="#1a4a2e"
-                enableShadows={sceneProfile.enableShadows}
-                textureLoadRadius={sceneProfile.bookTextureLoadRadius}
-                contentEnabled={true}
-                dynamicContent={book2DynamicContent}
-                frontCoverAvatarUrl={book2ProfileImageUrl ?? undefined}
-                largeBookFanSpreadDeg={8}
-              />
-            </group>
-          )}
+          <InteractiveBooks
+            renderSecondBook={sceneProfile.renderSecondBook}
+            enableShadows={sceneProfile.enableShadows}
+            textureLoadRadius={sceneProfile.bookTextureLoadRadius}
+            book2Pages={book2Pages}
+            book1DynamicContent={book1DynamicContent}
+            book2DynamicContent={book2DynamicContent}
+            book2ProfileImageUrl={book2ProfileImageUrl}
+          />
 
 
 
