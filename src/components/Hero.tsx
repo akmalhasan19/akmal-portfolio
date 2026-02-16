@@ -2,21 +2,23 @@
 
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, useFrame, useThree, ThreeElements } from '@react-three/fiber';
-import { OrbitControls, SpotLight, useDetectGPU, useGLTF } from '@react-three/drei';
+import { Html, SpotLight, useDetectGPU, useGLTF } from '@react-three/drei';
 import { Bloom, EffectComposer, Vignette } from '@react-three/postprocessing';
 import {
   ACESFilmicToneMapping,
+  CanvasTexture,
   Group,
   MathUtils,
   Mesh,
   MeshStandardMaterial,
   Object3D,
   PCFSoftShadowMap,
+  SRGBColorSpace,
   SpotLight as SpotLightImpl,
   Vector3,
 } from 'three';
-import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import { Book3D, createBookAtom } from './Book3D';
+import { useSetAtom } from 'jotai';
 import { CoffeeSteam } from './CoffeeSteam';
 
 import { useBookSideTextures } from '@/lib/book-content/useBookSideTextures';
@@ -31,7 +33,7 @@ interface ModelProps {
 }
 
 // Edit transform buku dari sini.
-const BOOK_POSITION: [number, number, number] = [0.5, -0.06, -0.01];
+const BOOK_POSITION: [number, number, number] = [0.3, -0.06, -0.01];
 const BOOK_ROTATION_DEG: [number, number, number] = [90, 180, 0];
 const BOOK_SCALE = 0.5;
 
@@ -39,6 +41,26 @@ const BOOK_SCALE = 0.5;
 const BOOK2_POSITION: [number, number, number] = [1.3, -0.01, 0.9];
 const BOOK2_ROTATION_DEG: [number, number, number] = [90, 180, 230];
 const BOOK2_SCALE = 0.45;
+
+// Third book transform
+const BOOK3_POSITION: [number, number, number] = [-1, -0.04, -1.1];
+const BOOK3_ROTATION_DEG: [number, number, number] = [90, 180, 100];
+const BOOK3_SCALE = 0.42;
+
+// Fourth book transform
+const BOOK4_POSITION: [number, number, number] = [-0.7, 0.085, -0.6];
+const BOOK4_ROTATION_DEG: [number, number, number] = [90, 180, 310];
+const BOOK4_SCALE = 0.48;
+
+// Fifth book transform
+const BOOK5_POSITION: [number, number, number] = [-0.7, 0.22, -0.98];
+const BOOK5_ROTATION_DEG: [number, number, number] = [90, 180, 40];
+const BOOK5_SCALE = 0.44;
+
+// Base surface Y positions - where the bottom of the book touches the table
+// These are calibrated so the book sits correctly on the table surface
+const LAMP_SLOT_SURFACE_Y = -0.165;  // Base Y for lamp slot (lowered)
+const SIDE_SLOT_SURFACE_Y = -0.165;  // Base Y for side slot (lowered)
 const BOOK_ROTATION_RAD: [number, number, number] = [
   MathUtils.degToRad(BOOK_ROTATION_DEG[0]),
   MathUtils.degToRad(BOOK_ROTATION_DEG[1]),
@@ -48,6 +70,21 @@ const BOOK2_ROTATION_RAD: [number, number, number] = [
   MathUtils.degToRad(BOOK2_ROTATION_DEG[0]),
   MathUtils.degToRad(BOOK2_ROTATION_DEG[1]),
   MathUtils.degToRad(BOOK2_ROTATION_DEG[2]),
+];
+const BOOK3_ROTATION_RAD: [number, number, number] = [
+  MathUtils.degToRad(BOOK3_ROTATION_DEG[0]),
+  MathUtils.degToRad(BOOK3_ROTATION_DEG[1]),
+  MathUtils.degToRad(BOOK3_ROTATION_DEG[2]),
+];
+const BOOK4_ROTATION_RAD: [number, number, number] = [
+  MathUtils.degToRad(BOOK4_ROTATION_DEG[0]),
+  MathUtils.degToRad(BOOK4_ROTATION_DEG[1]),
+  MathUtils.degToRad(BOOK4_ROTATION_DEG[2]),
+];
+const BOOK5_ROTATION_RAD: [number, number, number] = [
+  MathUtils.degToRad(BOOK5_ROTATION_DEG[0]),
+  MathUtils.degToRad(BOOK5_ROTATION_DEG[1]),
+  MathUtils.degToRad(BOOK5_ROTATION_DEG[2]),
 ];
 const BOOK_SWAP_DURATION_MS = 2000;
 const BOOK_SWAP_LIFT = 0.48;
@@ -60,10 +97,23 @@ const LAMP_BULB_POSITION: [number, number, number] = [-1.1, 1.4, 0];
 const LAMP_REFLECTOR_POSITION: [number, number, number] = [-0.6, 0.65, 0.2];
 const LAMP_TARGET_POSITION: [number, number, number] = [-0.55, -0.5, 0.2];
 
+// Desk name plaque transform (edit x/y/z directly).
+const DESK_PLAQUE_POSITION: [number, number, number] = [0.2, -0.15, 0.95];
+const DESK_PLAQUE_ROTATION_DEG: [number, number, number] = [0, 0, 0];
+const DESK_PLAQUE_SCALE = 0.6;
+const DESK_PLAQUE_ROTATION_RAD: [number, number, number] = [
+  MathUtils.degToRad(DESK_PLAQUE_ROTATION_DEG[0]),
+  MathUtils.degToRad(DESK_PLAQUE_ROTATION_DEG[1]),
+  MathUtils.degToRad(DESK_PLAQUE_ROTATION_DEG[2]),
+];
+
 
 
 const bookAtom = createBookAtom(0);
 const book2Atom = createBookAtom(0);
+const book3Atom = createBookAtom(0);
+const book4Atom = createBookAtom(0);
+const book5Atom = createBookAtom(0);
 
 // Reusing textures from Book3D for generated second-book pages.
 const pictures = [
@@ -92,7 +142,13 @@ interface SceneProfile {
   enableVolumetricLight: boolean;
   enablePostProcessing: boolean;
   renderSecondBook: boolean;
+  renderThirdBook: boolean;
+  renderFourthBook: boolean;
+  renderFifthBook: boolean;
   secondBookSheetCount: number;
+  thirdBookSheetCount: number;
+  fourthBookSheetCount: number;
+  fifthBookSheetCount: number;
   renderSteam: boolean;
   renderPlant: boolean;
   bookTextureLoadRadius: number;
@@ -108,7 +164,13 @@ const SCENE_PROFILES: Record<SceneProfile["name"], SceneProfile> = {
     enableVolumetricLight: false,
     enablePostProcessing: false,
     renderSecondBook: false,
+    renderThirdBook: false,
+    renderFourthBook: false,
+    renderFifthBook: false,
     secondBookSheetCount: 16,
+    thirdBookSheetCount: 16,
+    fourthBookSheetCount: 16,
+    fifthBookSheetCount: 16,
     renderSteam: false,
     renderPlant: false,
     bookTextureLoadRadius: 2,
@@ -122,15 +184,21 @@ const SCENE_PROFILES: Record<SceneProfile["name"], SceneProfile> = {
     enableVolumetricLight: true,
     enablePostProcessing: true,
     renderSecondBook: true,
+    renderThirdBook: true,
+    renderFourthBook: true,
+    renderFifthBook: true,
     secondBookSheetCount: 40,
+    thirdBookSheetCount: 32,
+    fourthBookSheetCount: 28,
+    fifthBookSheetCount: 36,
     renderSteam: true,
     renderPlant: true,
     bookTextureLoadRadius: Number.POSITIVE_INFINITY,
   },
 };
 
-type BookId = 'book1' | 'book2';
-type BookSlot = 'lamp' | 'side';
+type BookId = 'book1' | 'book2' | 'book3' | 'book4' | 'book5';
+type BookSlot = 'lamp' | 'side' | 'corner1' | 'corner2' | 'corner3';
 
 interface BookSlotTransform {
   position: [number, number, number];
@@ -138,6 +206,7 @@ interface BookSlotTransform {
   scale: number;
 }
 
+// Base slot transforms - Y position will be adjusted dynamically based on book thickness
 const BOOK_SLOT_TRANSFORMS: Record<BookSlot, BookSlotTransform> = {
   lamp: {
     position: BOOK_POSITION,
@@ -149,6 +218,50 @@ const BOOK_SLOT_TRANSFORMS: Record<BookSlot, BookSlotTransform> = {
     rotation: BOOK2_ROTATION_RAD,
     scale: BOOK2_SCALE,
   },
+  corner1: {
+    position: BOOK3_POSITION,
+    rotation: BOOK3_ROTATION_RAD,
+    scale: BOOK3_SCALE,
+  },
+  corner2: {
+    position: BOOK4_POSITION,
+    rotation: BOOK4_ROTATION_RAD,
+    scale: BOOK4_SCALE,
+  },
+  corner3: {
+    position: BOOK5_POSITION,
+    rotation: BOOK5_ROTATION_RAD,
+    scale: BOOK5_SCALE,
+  },
+};
+
+// Calculate the Y position for a book based on its thickness and slot
+// The Y position is: surface_y + (thickness / 2) because Y is the center of the book
+const calculateBookY = (slot: BookSlot, bookThickness: number): number => {
+  const surfaceY = slot === 'lamp' ? LAMP_SLOT_SURFACE_Y : SIDE_SLOT_SURFACE_Y;
+  return surfaceY + bookThickness / 2;
+};
+
+// Book cover colors for each book
+const BOOK_COVER_COLORS: Record<BookId, string> = {
+  book1: "#4a3020",
+  book2: "#1a4a2e",
+  book3: "#3a2a4a",
+  book4: "#4a3a1a",
+  book5: "#2a3a4a",
+};
+
+// Get slot transform with adjusted Y position for a specific book thickness
+const getSlotTransformForBook = (
+  slot: BookSlot,
+  bookThickness: number,
+): BookSlotTransform => {
+  const baseTransform = BOOK_SLOT_TRANSFORMS[slot];
+  const adjustedY = calculateBookY(slot, bookThickness);
+  return {
+    ...baseTransform,
+    position: [baseTransform.position[0], adjustedY, baseTransform.position[2]],
+  };
 };
 
 const lerp = (start: number, end: number, alpha: number) => start + (end - start) * alpha;
@@ -159,56 +272,152 @@ const setGroupTransform = (group: Group, transform: BookSlotTransform) => {
   group.scale.setScalar(transform.scale);
 };
 
-function ShiftTrackpadMove({
-  controlsRef,
-}: {
-  controlsRef: React.RefObject<OrbitControlsImpl | null>;
-}) {
-  const { camera, gl } = useThree();
+// Camera positions
+const OVERVIEW_CAMERA_POSITION = new Vector3(2.2, 1.0, 3.8);
+const OVERVIEW_CAMERA_TARGET = new Vector3(0, 0.2, -0.2);
 
+// Book-focus camera: above the book, rotated 180° (looking from behind desk)
+const BOOK_FOCUS_CAMERA_POSITION = new Vector3(0.3, 1.8, -0.4);
+const BOOK_FOCUS_CAMERA_TARGET = new Vector3(0.3, -0.05, 0.05);
+
+// Spiral arc pivot — the book position in XZ, used as center of the orbit
+const ARC_PIVOT_X = 0.3;
+const ARC_PIVOT_Z = 0.0;
+
+// Pre-computed arc geometry from start/end camera positions
+const ARC_START_ANGLE = Math.atan2(
+  OVERVIEW_CAMERA_POSITION.z - ARC_PIVOT_Z,
+  OVERVIEW_CAMERA_POSITION.x - ARC_PIVOT_X,
+); // ≈ 63.4° (front-right)
+const ARC_END_ANGLE = Math.atan2(
+  BOOK_FOCUS_CAMERA_POSITION.z - ARC_PIVOT_Z,
+  BOOK_FOCUS_CAMERA_POSITION.x - ARC_PIVOT_X,
+); // ≈ -90° (behind desk)
+const ARC_START_RADIUS = Math.hypot(
+  OVERVIEW_CAMERA_POSITION.x - ARC_PIVOT_X,
+  OVERVIEW_CAMERA_POSITION.z - ARC_PIVOT_Z,
+); // ≈ 4.25
+const ARC_END_RADIUS = Math.hypot(
+  BOOK_FOCUS_CAMERA_POSITION.x - ARC_PIVOT_X,
+  BOOK_FOCUS_CAMERA_POSITION.z - ARC_PIVOT_Z,
+); // ≈ 0.4
+
+const CAMERA_ARC_DURATION_MS = 1800;
+
+type CameraPhase = 'overview' | 'focusing' | 'focused' | 'book-closing' | 'unfocusing';
+const BOOK_CLOSE_DELAY_MS = 800;
+
+/** Compute position along the spiral arc at parameter t ∈ [0, 1].
+ *  Sweeps angle and shrinks radius from overview → book focus. */
+const spiralArcPosition = (
+  startAngle: number, endAngle: number,
+  startRadius: number, endRadius: number,
+  startY: number, endY: number,
+  t: number, out: Vector3,
+) => {
+  const angle = startAngle + (endAngle - startAngle) * t;
+  const radius = startRadius + (endRadius - startRadius) * t;
+  const y = startY + (endY - startY) * t;
+  out.set(
+    ARC_PIVOT_X + radius * Math.cos(angle),
+    y,
+    ARC_PIVOT_Z + radius * Math.sin(angle),
+  );
+  return out;
+};
+
+interface CameraSetupProps {
+  phase: CameraPhase;
+  onTransitionDone: () => void;
+}
+
+function CameraSetup({ phase, onTransitionDone }: CameraSetupProps) {
+  const { camera } = useThree();
+  const phaseRef = useRef<CameraPhase>(phase);
+  const animStartRef = useRef<number | null>(null);
+  const doneRef = useRef(false);
+  const tempPos = useRef(new Vector3());
+  const tempTarget = useRef(new Vector3());
+
+  // Sync prop → ref synchronously (runs every render, before useFrame)
+  if (phaseRef.current !== phase) {
+    phaseRef.current = phase;
+    if (phase === 'focusing' || phase === 'unfocusing') {
+      animStartRef.current = null; // will be set on first frame
+      doneRef.current = false;
+    }
+  }
+
+  // Set initial camera on mount
   useEffect(() => {
-    const dom = gl.domElement;
-    const forward = new Vector3();
-    const right = new Vector3();
-    const move = new Vector3();
+    camera.position.copy(OVERVIEW_CAMERA_POSITION);
+    camera.lookAt(OVERVIEW_CAMERA_TARGET);
+    camera.updateProjectionMatrix();
+  }, [camera]);
 
-    const handleWheel = (event: WheelEvent) => {
-      if (!event.shiftKey) {
-        return;
-      }
-      const controls = controlsRef.current;
-      if (!controls) {
-        return;
-      }
+  useFrame(() => {
+    const p = phaseRef.current;
 
-      event.preventDefault();
+    if (p === 'overview') {
+      camera.position.copy(OVERVIEW_CAMERA_POSITION);
+      camera.lookAt(OVERVIEW_CAMERA_TARGET);
+      return;
+    }
 
-      camera.getWorldDirection(forward);
-      forward.y = 0;
-      if (forward.lengthSq() < 1e-6) {
-        forward.set(0, 0, -1);
-      } else {
-        forward.normalize();
-      }
-      right.crossVectors(forward, camera.up).normalize();
+    if (p === 'focused' || p === 'book-closing') {
+      camera.position.copy(BOOK_FOCUS_CAMERA_POSITION);
+      camera.lookAt(BOOK_FOCUS_CAMERA_TARGET);
+      return;
+    }
 
-      const distance = camera.position.distanceTo(controls.target);
-      const panFactor = Math.max(0.4, distance) * 0.0025;
+    // Animation already finished but React hasn't updated phase yet — hold final position
+    if (doneRef.current) {
+      const finalPos = p === 'focusing' ? BOOK_FOCUS_CAMERA_POSITION : OVERVIEW_CAMERA_POSITION;
+      const finalTarget = p === 'focusing' ? BOOK_FOCUS_CAMERA_TARGET : OVERVIEW_CAMERA_TARGET;
+      camera.position.copy(finalPos);
+      camera.lookAt(finalTarget);
+      return;
+    }
 
-      move.set(0, 0, 0);
-      move.addScaledVector(right, event.deltaX * panFactor);
-      move.addScaledVector(forward, -event.deltaY * panFactor);
+    // Animating — focusing or unfocusing
+    const now = performance.now();
+    if (animStartRef.current === null) {
+      animStartRef.current = now;
+    }
 
-      camera.position.add(move);
-      controls.target.add(move);
-      controls.update();
-    };
+    const rawT = MathUtils.clamp(
+      (now - animStartRef.current) / CAMERA_ARC_DURATION_MS, 0, 1,
+    );
+    const t = MathUtils.smootherstep(rawT, 0, 1);
 
-    dom.addEventListener('wheel', handleWheel, { passive: false });
-    return () => {
-      dom.removeEventListener('wheel', handleWheel);
-    };
-  }, [camera, controlsRef, gl]);
+    const forward = p === 'focusing';
+    const sAngle = forward ? ARC_START_ANGLE : ARC_END_ANGLE;
+    const eAngle = forward ? ARC_END_ANGLE : ARC_START_ANGLE;
+    const sRadius = forward ? ARC_START_RADIUS : ARC_END_RADIUS;
+    const eRadius = forward ? ARC_END_RADIUS : ARC_START_RADIUS;
+    const sY = forward ? OVERVIEW_CAMERA_POSITION.y : BOOK_FOCUS_CAMERA_POSITION.y;
+    const eY = forward ? BOOK_FOCUS_CAMERA_POSITION.y : OVERVIEW_CAMERA_POSITION.y;
+    const t0 = forward ? OVERVIEW_CAMERA_TARGET : BOOK_FOCUS_CAMERA_TARGET;
+    const t2 = forward ? BOOK_FOCUS_CAMERA_TARGET : OVERVIEW_CAMERA_TARGET;
+
+    spiralArcPosition(sAngle, eAngle, sRadius, eRadius, sY, eY, t, tempPos.current);
+    camera.position.copy(tempPos.current);
+
+    // Linearly interpolate the lookAt target
+    tempTarget.current.lerpVectors(t0, t2, t);
+    camera.lookAt(tempTarget.current);
+
+    if (rawT >= 1) {
+      // Snap to exact final position
+      const finalPos = forward ? BOOK_FOCUS_CAMERA_POSITION : OVERVIEW_CAMERA_POSITION;
+      camera.position.copy(finalPos);
+      camera.lookAt(t2);
+      // Mark done so stale closures won't restart the animation
+      doneRef.current = true;
+      // Defer state update to avoid mid-frame re-render
+      queueMicrotask(onTransitionDone);
+    }
+  });
 
   return null;
 }
@@ -348,30 +557,133 @@ function CoffeeMug({ steamEnabled, enableShadows, ...props }: CoffeeMugProps) {
   );
 }
 
+type DeskNamePlaqueProps = ThreeElements['group'] & {
+  enableShadows: boolean;
+  nameText?: string;
+};
+
+function DeskNamePlaque({ enableShadows, nameText = 'Akmal Hasan Mulyadi', ...props }: DeskNamePlaqueProps) {
+  const nameplateTexture = useMemo(() => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1536;
+    canvas.height = 256;
+
+    const context = canvas.getContext('2d');
+    if (!context) {
+      return null;
+    }
+
+    context.fillStyle = '#d3b06f';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+
+    context.strokeStyle = '#7d5e2f';
+    context.lineWidth = 16;
+    context.strokeRect(12, 12, canvas.width - 24, canvas.height - 24);
+
+    const plaqueText = nameText.toUpperCase();
+    let fontSize = 102;
+    const maxTextWidth = canvas.width - 120;
+    context.fillStyle = '#2a1c0d';
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    while (fontSize > 48) {
+      context.font = `700 ${fontSize}px 'Georgia', 'Times New Roman', serif`;
+      if (context.measureText(plaqueText).width <= maxTextWidth) {
+        break;
+      }
+      fontSize -= 2;
+    }
+    context.fillText(plaqueText, canvas.width / 2, canvas.height / 2 + 6);
+
+    const texture = new CanvasTexture(canvas);
+    texture.colorSpace = SRGBColorSpace;
+    texture.needsUpdate = true;
+    return texture;
+  }, [nameText]);
+
+  useEffect(() => () => {
+    nameplateTexture?.dispose();
+  }, [nameplateTexture]);
+
+  return (
+    <group {...props}>
+      <mesh castShadow={enableShadows} receiveShadow={enableShadows} position={[0, 0.035, 0]}>
+        <boxGeometry args={[2.2, 0.08, 0.5]} />
+        <meshStandardMaterial color="#2f2b25" roughness={0.48} metalness={0.52} />
+      </mesh>
+
+      <mesh castShadow={enableShadows} receiveShadow={enableShadows} position={[-0.82, 0.12, 0]}>
+        <cylinderGeometry args={[0.04, 0.04, 0.17, 20]} />
+        <meshStandardMaterial color="#b3894f" roughness={0.34} metalness={0.78} />
+      </mesh>
+      <mesh castShadow={enableShadows} receiveShadow={enableShadows} position={[0.82, 0.12, 0]}>
+        <cylinderGeometry args={[0.04, 0.04, 0.17, 20]} />
+        <meshStandardMaterial color="#b3894f" roughness={0.34} metalness={0.78} />
+      </mesh>
+
+      <mesh castShadow={enableShadows} receiveShadow={enableShadows} position={[0, 0.205, 0]}>
+        <boxGeometry args={[1.86, 0.27, 0.06]} />
+        <meshStandardMaterial color="#9d753f" roughness={0.33} metalness={0.7} />
+      </mesh>
+
+      <mesh receiveShadow={enableShadows} position={[0, 0.205, 0.034]}>
+        <planeGeometry args={[1.74, 0.18]} />
+        <meshStandardMaterial
+          map={nameplateTexture ?? undefined}
+          color="#ead4a1"
+          roughness={0.4}
+          metalness={0.12}
+        />
+      </mesh>
+    </group>
+  );
+}
+
 interface InteractiveBooksProps {
   renderSecondBook: boolean;
+  renderThirdBook: boolean;
+  renderFourthBook: boolean;
+  renderFifthBook: boolean;
   enableShadows: boolean;
   textureLoadRadius: number;
   book2Pages: Array<{ front: string; back: string }>;
+  book3Pages: Array<{ front: string; back: string }>;
+  book4Pages: Array<{ front: string; back: string }>;
+  book5Pages: Array<{ front: string; back: string }>;
   book1DynamicContent: ReturnType<typeof useBookSideTextures>;
   book2DynamicContent: ReturnType<typeof useBookSideTextures>;
   book2ProfileImageUrl: string | null;
+  bookFocused: boolean;
+  onBookFocus: () => void;
 }
 
 function InteractiveBooks({
   renderSecondBook,
+  renderThirdBook,
+  renderFourthBook,
+  renderFifthBook,
   enableShadows,
   textureLoadRadius,
   book2Pages,
+  book3Pages,
+  book4Pages,
+  book5Pages,
   book1DynamicContent,
   book2DynamicContent,
   book2ProfileImageUrl,
+  bookFocused,
+  onBookFocus,
 }: InteractiveBooksProps) {
   const book1GroupRef = useRef<Group | null>(null);
   const book2GroupRef = useRef<Group | null>(null);
   const spotlightBookRef = useRef<BookId>('book1');
+  const [spotlightBook, setSpotlightBook] = useState<BookId>('book1');
   const swapAnimationRef = useRef<{ startedAtMs: number; spotlightBeforeSwap: BookId } | null>(null);
   const [isSwapping, setIsSwapping] = useState(false);
+
+  // Track book thickness for dynamic Y positioning
+  const [book1Thickness, setBook1Thickness] = useState<number>(0);
+  const [book2Thickness, setBook2Thickness] = useState<number>(0);
 
   const getSlotForBook = useCallback(
     (bookId: BookId, spotlightBook: BookId): BookSlot => (
@@ -381,16 +693,24 @@ function InteractiveBooks({
   );
 
   const handleBookClick = useCallback((bookId: BookId) => {
+    const currentSpotlightBook = spotlightBookRef.current;
+
+    // If the lamp-slot book is clicked and camera is NOT yet focused → trigger focus
+    if (bookId === currentSpotlightBook && !bookFocused) {
+      onBookFocus();
+      return true; // consume click
+    }
+
+    // If already focused on book, let Book3D handle the click (page flip)
+    if (bookId === currentSpotlightBook && bookFocused) {
+      return false;
+    }
+
     if (!renderSecondBook) {
       return false;
     }
     if (swapAnimationRef.current) {
       return true;
-    }
-
-    const currentSpotlightBook = spotlightBookRef.current;
-    if (bookId === currentSpotlightBook) {
-      return false;
     }
 
     swapAnimationRef.current = {
@@ -399,7 +719,7 @@ function InteractiveBooks({
     };
     setIsSwapping(true);
     return true;
-  }, [renderSecondBook]);
+  }, [renderSecondBook, bookFocused, onBookFocus]);
 
   useFrame(() => {
     const book1Group = book1GroupRef.current;
@@ -408,7 +728,7 @@ function InteractiveBooks({
     }
 
     if (!renderSecondBook) {
-      setGroupTransform(book1Group, BOOK_SLOT_TRANSFORMS.lamp);
+      setGroupTransform(book1Group, getSlotTransformForBook('lamp', book1Thickness));
       return;
     }
 
@@ -421,8 +741,8 @@ function InteractiveBooks({
     if (!swapAnimation) {
       const book1Slot = getSlotForBook('book1', spotlightBookRef.current);
       const book2Slot = getSlotForBook('book2', spotlightBookRef.current);
-      setGroupTransform(book1Group, BOOK_SLOT_TRANSFORMS[book1Slot]);
-      setGroupTransform(book2Group, BOOK_SLOT_TRANSFORMS[book2Slot]);
+      setGroupTransform(book1Group, getSlotTransformForBook(book1Slot, book1Thickness));
+      setGroupTransform(book2Group, getSlotTransformForBook(book2Slot, book2Thickness));
       return;
     }
 
@@ -434,11 +754,11 @@ function InteractiveBooks({
     const easedProgress = MathUtils.smootherstep(rawProgress, 0, 1);
     const inAirFactor = Math.sin(Math.PI * easedProgress);
 
-    const applySwapPose = (bookId: BookId, group: Group) => {
+    const applySwapPose = (bookId: BookId, group: Group, bookThickness: number) => {
       const startSlot = getSlotForBook(bookId, swapAnimation.spotlightBeforeSwap);
       const endSlot: BookSlot = startSlot === 'lamp' ? 'side' : 'lamp';
-      const startTransform = BOOK_SLOT_TRANSFORMS[startSlot];
-      const endTransform = BOOK_SLOT_TRANSFORMS[endSlot];
+      const startTransform = getSlotTransformForBook(startSlot, bookThickness);
+      const endTransform = getSlotTransformForBook(endSlot, bookThickness);
       const moveDirection = startSlot === 'side' ? 1 : -1;
 
       group.position.set(
@@ -461,11 +781,13 @@ function InteractiveBooks({
       group.scale.setScalar(scale);
     };
 
-    applySwapPose('book1', book1Group);
-    applySwapPose('book2', book2Group);
+    applySwapPose('book1', book1Group, book1Thickness);
+    applySwapPose('book2', book2Group, book2Thickness);
 
     if (rawProgress >= 1) {
-      spotlightBookRef.current = swapAnimation.spotlightBeforeSwap === 'book1' ? 'book2' : 'book1';
+      const newSpotlight = swapAnimation.spotlightBeforeSwap === 'book1' ? 'book2' : 'book1';
+      spotlightBookRef.current = newSpotlight;
+      setSpotlightBook(newSpotlight);
       swapAnimationRef.current = null;
       setIsSwapping(false);
     }
@@ -484,13 +806,15 @@ function InteractiveBooks({
           coverColor="#4a3020"
           coverFrontTexturePath="/textures/book1-cover-front.png"
           coverBackTexturePath="/textures/book1-cover-back.png"
+          spineBaseOffset={[-0.07, -0.002, 0.012]}
           coverFrontTextureOffsetY={0}
           enableShadows={enableShadows}
           textureLoadRadius={textureLoadRadius}
           contentEnabled={true}
           dynamicContent={book1DynamicContent}
           onBookClick={() => handleBookClick('book1')}
-          interactionDisabled={isSwapping}
+          interactionDisabled={isSwapping || (bookFocused && spotlightBook !== 'book1')}
+          onThicknessChange={setBook1Thickness}
         />
       </group>
 
@@ -512,7 +836,62 @@ function InteractiveBooks({
             frontCoverAvatarUrl={book2ProfileImageUrl ?? undefined}
             largeBookFanSpreadDeg={8}
             onBookClick={() => handleBookClick('book2')}
-            interactionDisabled={isSwapping}
+            interactionDisabled={isSwapping || (bookFocused && spotlightBook !== 'book2')}
+            onThicknessChange={setBook2Thickness}
+          />
+        </group>
+      )}
+
+      {renderThirdBook && (
+        <group
+          position={BOOK3_POSITION}
+          scale={BOOK3_SCALE}
+          rotation={BOOK3_ROTATION_RAD}
+        >
+          <Book3D
+            bookAtom={book3Atom}
+            pages={book3Pages}
+            coverColor={BOOK_COVER_COLORS.book3}
+            enableShadows={enableShadows}
+            textureLoadRadius={textureLoadRadius}
+            largeBookFanSpreadDeg={8}
+            interactionDisabled={true}
+          />
+        </group>
+      )}
+
+      {renderFourthBook && (
+        <group
+          position={BOOK4_POSITION}
+          scale={BOOK4_SCALE}
+          rotation={BOOK4_ROTATION_RAD}
+        >
+          <Book3D
+            bookAtom={book4Atom}
+            pages={book4Pages}
+            coverColor={BOOK_COVER_COLORS.book4}
+            enableShadows={enableShadows}
+            textureLoadRadius={textureLoadRadius}
+            largeBookFanSpreadDeg={8}
+            interactionDisabled={true}
+          />
+        </group>
+      )}
+
+      {renderFifthBook && (
+        <group
+          position={BOOK5_POSITION}
+          scale={BOOK5_SCALE}
+          rotation={BOOK5_ROTATION_RAD}
+        >
+          <Book3D
+            bookAtom={book5Atom}
+            pages={book5Pages}
+            coverColor={BOOK_COVER_COLORS.book5}
+            enableShadows={enableShadows}
+            textureLoadRadius={textureLoadRadius}
+            largeBookFanSpreadDeg={8}
+            interactionDisabled={true}
           />
         </group>
       )}
@@ -521,11 +900,54 @@ function InteractiveBooks({
 }
 
 export default function Hero() {
-  const [lightsOn, setLightsOn] = React.useState(true);
-  const controlsRef = useRef<OrbitControlsImpl | null>(null);
   const lampSpotRef = useRef<SpotLightImpl | null>(null);
   const lampTargetRef = useRef<Object3D | null>(null);
   const gpu = useDetectGPU();
+
+  // Camera focus state
+  const [cameraPhase, setCameraPhase] = useState<CameraPhase>('overview');
+  const bookFocused = cameraPhase === 'focused' || cameraPhase === 'focusing';
+  const setSpotlightPage = useSetAtom(bookAtom);
+
+  // Auto-open front cover when camera focuses on the book
+  const [showBackButton, setShowBackButton] = useState(false);
+  useEffect(() => {
+    if (cameraPhase === 'focused') {
+      setSpotlightPage(1); // Open front cover
+      // Show the back button after the book has fully opened
+      const timer = setTimeout(() => setShowBackButton(true), 1400);
+      return () => clearTimeout(timer);
+    } else if (cameraPhase === 'book-closing') {
+      setSpotlightPage(0); // Close book
+      // Wait for the book closing animation, then start camera unfocusing
+      const timer = setTimeout(() => {
+        setCameraPhase('unfocusing');
+      }, BOOK_CLOSE_DELAY_MS);
+      return () => clearTimeout(timer);
+    } else {
+      setShowBackButton(false);
+    }
+  }, [cameraPhase, setSpotlightPage]);
+
+  const handleBookFocus = useCallback(() => {
+    if (cameraPhase === 'overview') {
+      setCameraPhase('focusing');
+    }
+  }, [cameraPhase]);
+
+  const handleBackToOverview = useCallback(() => {
+    if (cameraPhase === 'focused') {
+      setCameraPhase('book-closing');
+    }
+  }, [cameraPhase]);
+
+  const handleTransitionDone = useCallback(() => {
+    setCameraPhase((prev) => {
+      if (prev === 'focusing') return 'focused';
+      if (prev === 'unfocusing') return 'overview';
+      return prev;
+    });
+  }, []);
 
   const isLowEndDevice = !gpu || gpu.isMobile || gpu.tier <= 1;
   const sceneProfile = isLowEndDevice
@@ -534,6 +956,18 @@ export default function Hero() {
   const book2Pages = useMemo(
     () => createBookInteriorPages(sceneProfile.secondBookSheetCount),
     [sceneProfile.secondBookSheetCount],
+  );
+  const book3Pages = useMemo(
+    () => createBookInteriorPages(sceneProfile.thirdBookSheetCount),
+    [sceneProfile.thirdBookSheetCount],
+  );
+  const book4Pages = useMemo(
+    () => createBookInteriorPages(sceneProfile.fourthBookSheetCount),
+    [sceneProfile.fourthBookSheetCount],
+  );
+  const book5Pages = useMemo(
+    () => createBookInteriorPages(sceneProfile.fifthBookSheetCount),
+    [sceneProfile.fifthBookSheetCount],
   );
 
   // Dynamic content for Book 1
@@ -568,17 +1002,6 @@ export default function Hero() {
 
   return (
     <div className="h-screen w-full bg-[#101010] relative">
-      <div className="absolute bottom-10 right-10 z-10">
-        <button
-          onClick={() => setLightsOn((prev) => !prev)}
-          className={`px-4 py-2 rounded-full font-medium transition-all duration-300 backdrop-blur-md border ${lightsOn
-            ? 'bg-amber-100/10 border-amber-500/30 text-amber-200 shadow-[0_0_15px_rgba(251,191,36,0.2)] hover:bg-amber-100/20'
-            : 'bg-white/5 border-white/10 text-gray-400 hover:bg-white/10'
-            }`}
-        >
-          {lightsOn ? 'Turn Room Lights Off' : 'Turn Room Lights On'}
-        </button>
-      </div>
 
       {/* Book Controllers */}
       {/* <div className="absolute bottom-10 left-1/2 -translate-x-1/2 flex flex-col gap-2 z-10">
@@ -592,7 +1015,7 @@ export default function Hero() {
         dpr={sceneProfile.dpr}
         shadows={sceneProfile.enableShadows}
         gl={{ antialias: sceneProfile.antialias, powerPreference: 'high-performance' }}
-        camera={{ position: [0, 3, 6], fov: 40 }}
+        camera={{ position: [2.2, 1.0, 3.8], fov: 40 }}
         onCreated={({ gl }) => {
           gl.toneMapping = ACESFilmicToneMapping;
           gl.toneMappingExposure = sceneProfile.enablePostProcessing ? 0.7 : 0.75;
@@ -604,7 +1027,7 @@ export default function Hero() {
       >
         <color attach="background" args={['#101010']} />
 
-        <ambientLight intensity={lightsOn ? 0.5 : 0} />
+        <ambientLight intensity={0.5} />
 
         <object3D ref={lampTargetRef} position={LAMP_TARGET_POSITION} />
 
@@ -657,12 +1080,20 @@ export default function Hero() {
 
           <InteractiveBooks
             renderSecondBook={sceneProfile.renderSecondBook}
+            renderThirdBook={sceneProfile.renderThirdBook}
+            renderFourthBook={sceneProfile.renderFourthBook}
+            renderFifthBook={sceneProfile.renderFifthBook}
             enableShadows={sceneProfile.enableShadows}
             textureLoadRadius={sceneProfile.bookTextureLoadRadius}
             book2Pages={book2Pages}
+            book3Pages={book3Pages}
+            book4Pages={book4Pages}
+            book5Pages={book5Pages}
             book1DynamicContent={book1DynamicContent}
             book2DynamicContent={book2DynamicContent}
             book2ProfileImageUrl={book2ProfileImageUrl}
+            bookFocused={bookFocused}
+            onBookFocus={handleBookFocus}
           />
 
 
@@ -670,8 +1101,15 @@ export default function Hero() {
           <CoffeeMug
             steamEnabled={sceneProfile.renderSteam}
             enableShadows={sceneProfile.enableShadows}
-            position={[0.2, 0.04, 0.8]}
+            position={[1.3, 0.04, -0.6]}
             rotation={[0, Math.PI / -2, 0]}
+          />
+          <DeskNamePlaque
+            enableShadows={sceneProfile.enableShadows}
+            position={DESK_PLAQUE_POSITION}
+            rotation={DESK_PLAQUE_ROTATION_RAD}
+            scale={DESK_PLAQUE_SCALE}
+            nameText="Akmal Hasan Mulyadi"
           />
           {sceneProfile.renderPlant && (
             <Model
@@ -684,7 +1122,7 @@ export default function Hero() {
           )}
           <Model
             path="/models/ballpoin_golden/scene.gltf"
-            position={[1.7, 0.16, 0.3]}
+            position={[1, 0.16, 0.1]}
             scale={0.3}
             rotation={[0, 0.5, 1.57]}
             enableShadows={sceneProfile.enableShadows}
@@ -697,16 +1135,54 @@ export default function Hero() {
           </EffectComposer>
         )}
 
-        <ShiftTrackpadMove controlsRef={controlsRef} />
-        <OrbitControls
-          ref={controlsRef}
-          enableZoom
-          enablePan
-          minPolarAngle={0}
-          maxPolarAngle={Math.PI}
-          minAzimuthAngle={-Infinity}
-          maxAzimuthAngle={Infinity}
-        />
+        <CameraSetup phase={cameraPhase} onTransitionDone={handleTransitionDone} />
+
+        {/* 3D Home button — on the left page (back of front cover), vintage style */}
+        {(cameraPhase === 'focused') && (
+          <group position={[0.8, 0.02, 0.33]}>
+            <Html
+              center
+              distanceFactor={1.0}
+              style={{ pointerEvents: showBackButton ? 'auto' : 'none' }}
+              zIndexRange={[100, 0]}
+            >
+              <button
+                onClick={handleBackToOverview}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '8px 18px',
+                  borderRadius: '4px',
+                  background: 'transparent',
+                  border: 'none',
+                  color: '#5a3e28',
+                  cursor: 'pointer',
+                  fontSize: '22px',
+                  fontFamily: 'var(--font-caveat), "Caveat", cursive',
+                  fontWeight: 700,
+                  whiteSpace: 'nowrap',
+                  letterSpacing: '0.5px',
+                  textDecoration: 'none',
+                  transition: 'opacity 0.6s ease, color 0.3s',
+                  textShadow: '0 1px 2px rgba(90,62,40,0.15)',
+                  opacity: showBackButton ? 1 : 0,
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = '#3a2010';
+                  e.currentTarget.style.textDecoration = 'underline';
+                  e.currentTarget.style.textUnderlineOffset = '4px';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = '#5a3e28';
+                  e.currentTarget.style.textDecoration = 'none';
+                }}
+              >
+                ← Kembali
+              </button>
+            </Html>
+          </group>
+        )}
       </Canvas>
     </div>
   );

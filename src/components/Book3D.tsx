@@ -977,8 +977,11 @@ export interface Book3DProps extends GroupProps {
   largeBookFanSpreadDeg?: number;
   /** Optional click interceptor from parent scene. Return true to consume click. */
   onBookClick?: () => boolean;
-  /** Disable page interactions while parent runs scene-level animation. */
-  interactionDisabled?: boolean;
+  /** Disable page interactions while parent runs scene-level animation. */  interactionDisabled?: boolean;
+  /** Callback fired when book thickness (totalStackDepth) changes. */
+  onThicknessChange?: (thickness: number) => void;
+  /** Base connector offset for spine positioning: [x, y, z]. */
+  spineBaseOffset?: [number, number, number];
 
 }
 
@@ -1000,6 +1003,8 @@ export const Book3D = ({
   largeBookFanSpreadDeg,
   onBookClick,
   interactionDisabled = false,
+  onThicknessChange,
+  spineBaseOffset = [COVER_CONNECTOR_X_OFFSET, COVER_CONNECTOR_Y_OFFSET, COVER_CONNECTOR_Z_OFFSET],
 
   ...props
 }: Book3DProps) => {
@@ -1050,6 +1055,11 @@ export const Book3D = ({
 
     return { sheetZOffsets: offsets, totalStackDepth: total };
   }, [activePages]);
+
+  // Report thickness to parent when it changes
+  useEffect(() => {
+    onThicknessChange?.(totalStackDepth);
+  }, [totalStackDepth, onThicknessChange]);
 
   const coverConnectorGeometry = useMemo(() => createCoverConnectorGeometry(
     height + COVER_OVERHANG_Y,
@@ -1163,21 +1173,21 @@ export const Book3D = ({
     easing.damp(
       coverConnectorRef.current.position,
       "z",
-      targetConnectorZ + COVER_CONNECTOR_Z_OFFSET,
+      targetConnectorZ + spineBaseOffset[2],
       0.35,
       delta,
     );
     easing.damp(
       coverConnectorRef.current.position,
       "x",
-      COVER_CONNECTOR_X_OFFSET + spineOffset,
+      spineBaseOffset[0] + spineOffset,
       0.35,
       delta,
     );
     easing.damp(
       coverConnectorRef.current.position,
       "y",
-      (bookClosed ? 0 : 0.005) + COVER_CONNECTOR_Y_OFFSET,
+      (bookClosed ? 0 : 0.005) + spineBaseOffset[1],
       0.35,
       delta,
     );
@@ -1229,9 +1239,9 @@ export const Book3D = ({
         ref={coverConnectorRef}
         geometry={coverConnectorGeometry}
         material={coverConnectorMaterial}
-        position-x={COVER_CONNECTOR_X_OFFSET}
-        position-y={COVER_CONNECTOR_Y_OFFSET}
-        position-z={COVER_CONNECTOR_Z_OFFSET}
+        position-x={spineBaseOffset[0]}
+        position-y={spineBaseOffset[1]}
+        position-z={spineBaseOffset[2]}
       />
     </group>
   );
