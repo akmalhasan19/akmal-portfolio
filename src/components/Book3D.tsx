@@ -2,7 +2,7 @@ import { useCursor, useTexture } from "@react-three/drei";
 import { ThreeElements, useFrame } from "@react-three/fiber";
 import { atom, useAtom, useSetAtom, type PrimitiveAtom } from "jotai";
 import { easing } from "maath";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, memo } from "react";
 import {
   Bone,
   BoxGeometry,
@@ -147,6 +147,7 @@ interface SkinnedGeometryOptions {
   width: number;
   height: number;
   depth: number;
+  widthSegments: number;
   heightSegments: number;
   depthSegments: number;
 }
@@ -155,6 +156,7 @@ const createSkinnedPageGeometry = ({
   width,
   height,
   depth,
+  widthSegments,
   heightSegments,
   depthSegments,
 }: SkinnedGeometryOptions) => {
@@ -162,7 +164,7 @@ const createSkinnedPageGeometry = ({
     width,
     height,
     depth,
-    PAGE_SEGMENTS,
+    widthSegments,
     heightSegments,
     depthSegments,
   );
@@ -172,13 +174,13 @@ const createSkinnedPageGeometry = ({
   const vertex = new Vector3();
   const skinIndexes: number[] = [];
   const skinWeights: number[] = [];
-  const segmentWidth = width / PAGE_SEGMENTS;
+  const segmentWidth = width / widthSegments;
 
   for (let i = 0; i < position.count; i += 1) {
     vertex.fromBufferAttribute(position, i);
     const x = MathUtils.clamp(vertex.x, 0, width - 0.00001);
     const skinIndex = Math.min(
-      PAGE_SEGMENTS - 1,
+      widthSegments - 1,
       Math.max(0, Math.floor(x / segmentWidth)),
     );
     const skinWeight = (x % segmentWidth) / segmentWidth;
@@ -203,6 +205,7 @@ const getCachedSkinnedGeometry = ({
   width,
   height,
   depth,
+  widthSegments,
   heightSegments,
   depthSegments,
   roundedCornerRadius = 0,
@@ -211,6 +214,7 @@ const getCachedSkinnedGeometry = ({
     width.toFixed(5),
     height.toFixed(5),
     depth.toFixed(5),
+    widthSegments,
     heightSegments,
     depthSegments,
     roundedCornerRadius.toFixed(5),
@@ -225,6 +229,7 @@ const getCachedSkinnedGeometry = ({
     width,
     height,
     depth,
+    widthSegments,
     heightSegments,
     depthSegments,
   });
@@ -433,7 +438,10 @@ interface PageProps extends GroupProps {
   onBookClick?: () => boolean;
   /** Disable page interactions while parent runs scene-level animation. */
   interactionDisabled?: boolean;
-
+  /** Number of bone segments per page. Lower = cheaper animation. */
+  pageSegments?: number;
+  /** Minimum page number allowed to flip to manually. Default 0. */
+  minPage?: number;
 }
 
 const Page = ({
@@ -462,6 +470,8 @@ const Page = ({
   largeBookFanSpreadDeg,
   onBookClick,
   interactionDisabled = false,
+  pageSegments = PAGE_SEGMENTS,
+  minPage = 0,
 
   ...props
 }: PageProps) => {
@@ -480,8 +490,8 @@ const Page = ({
   const useLegacyFront = !front.startsWith("__");
   const useLegacyBack = !back.startsWith("__");
 
-  const hasFrontTexture = texturesEnabled && useLegacyFront && !dynamicFrontTexture;
-  const hasBackTexture = texturesEnabled && useLegacyBack && !dynamicBackTexture;
+  const hasFrontTexture = texturesEnabled && useLegacyFront && !dynamicFrontTexture && front.length > 0;
+  const hasBackTexture = texturesEnabled && useLegacyBack && !dynamicBackTexture && back.length > 0;
   const activeCoverFrontTexturePath = isFrontCover ? coverFrontTexturePath : undefined;
   const activeCoverBackTexturePath = isBackCover ? coverBackTexturePath : undefined;
   const activeCoverAvatarPath = isFrontCover ? frontCoverAvatarUrl : undefined;
@@ -552,6 +562,7 @@ const Page = ({
   const turnDirection = useRef<1 | -1>(opened ? 1 : -1);
   const skinnedMeshRef = useRef<SkinnedMesh | null>(null);
   const settledFrameCount = useRef(0);
+  const idleRef = useRef(false);
   const lastFrameState = useRef({
     rootY: opened ? -Math.PI / 2 : Math.PI / 2,
     y: 0,
@@ -568,23 +579,26 @@ const Page = ({
       width: width,
       height: height,
       depth: PAGE_DEPTH,
+      widthSegments: pageSegments,
       heightSegments: PAGE_HEIGHT_SEGMENTS,
       depthSegments: PAGE_DEPTH_SEGMENTS,
+      roundedCornerRadius: 0,
     });
 
     const coverGeometry = getCachedSkinnedGeometry({
       width: width + COVER_OVERHANG_X,
       height: height + COVER_OVERHANG_Y,
       depth: COVER_DEPTH,
+      widthSegments: pageSegments,
       heightSegments: COVER_HEIGHT_SEGMENTS,
       depthSegments: COVER_DEPTH_SEGMENTS,
       roundedCornerRadius: COVER_CORNER_RADIUS,
     });
 
     const bones: Bone[] = [];
-    const segmentWidth = (isCoverPage ? width + COVER_OVERHANG_X : width) / PAGE_SEGMENTS;
+    const segmentWidth = (isCoverPage ? width + COVER_OVERHANG_X : width) / pageSegments;
 
-    for (let i = 0; i <= PAGE_SEGMENTS; i += 1) {
+    for (let i = 0; i <= pageSegments; i += 1) {
       const bone = new Bone();
       bone.position.x = i === 0 ? 0 : segmentWidth;
       bones.push(bone);
@@ -702,10 +716,16 @@ const Page = ({
 
   useEffect(() => {
     settledFrameCount.current = 0;
+    idleRef.current = false;
   }, [bookClosed, highlighted, opened, page, totalPages]);
 
   useFrame((_, delta) => {
     if (!skinnedMeshRef.current || !group.current) {
+      return;
+    }
+
+    // Skip expensive bone updates for pages that have fully settled
+    if (idleRef.current) {
       return;
     }
 
@@ -881,23 +901,27 @@ const Page = ({
       return;
     }
 
+    // Measure how much bone state changed this frame
+    const frameDelta =
+      Math.abs(rootBone.rotation.y - lastFrameState.current.rootY) +
+      Math.abs(group.current.position.y - lastFrameState.current.y) +
+      Math.abs(group.current.position.z - lastFrameState.current.z);
+
     lastFrameState.current = {
       rootY: rootBone.rotation.y,
       y: group.current.position.y,
       z: group.current.position.z,
     };
 
-    /*
-    // Removed idle check to prevent animation stuttering
-    if (!highlighted && turningTime <= 0.001 && frameDelta < 0.00015) {
+    // Mark page as idle after it has been settled for many consecutive frames
+    if (!highlighted && turningTime <= 0.001 && frameDelta < 0.001) {
       settledFrameCount.current += 1;
-      if (settledFrameCount.current > 24) {
+      if (settledFrameCount.current > 60) {
         idleRef.current = true;
       }
     } else {
       settledFrameCount.current = 0;
     }
-    */
   });
 
   return (
@@ -926,7 +950,12 @@ const Page = ({
           setHighlighted(false);
           return;
         }
-        setPage(opened ? number : number + 1);
+        const targetPage = opened ? number : number + 1;
+        if (targetPage < minPage) {
+          setHighlighted(false);
+          return;
+        }
+        setPage(targetPage);
         setHighlighted(false);
       }}
     >
@@ -956,6 +985,8 @@ const Page = ({
   );
 };
 
+const MemoizedPage = memo(Page);
+
 export interface Book3DProps extends GroupProps {
   bookAtom?: PrimitiveAtom<number>;
   width?: number;
@@ -982,6 +1013,10 @@ export interface Book3DProps extends GroupProps {
   onThicknessChange?: (thickness: number) => void;
   /** Base connector offset for spine positioning: [x, y, z]. */
   spineBaseOffset?: [number, number, number];
+  /** Number of bone segments per page for this book. Lower = cheaper. */
+  pageSegments?: number;
+  /** Minimum page number allowed to flip to manually. Default 0. */
+  minPage?: number;
 
 }
 
@@ -1005,6 +1040,8 @@ export const Book3D = ({
   interactionDisabled = false,
   onThicknessChange,
   spineBaseOffset = [COVER_CONNECTOR_X_OFFSET, COVER_CONNECTOR_Y_OFFSET, COVER_CONNECTOR_Z_OFFSET],
+  pageSegments,
+  minPage = 0,
 
   ...props
 }: Book3DProps) => {
@@ -1087,10 +1124,10 @@ export const Book3D = ({
       if (!pageData) {
         continue;
       }
-      if (!pageData.front.startsWith("__")) {
+      if (pageData.front.length > 0 && !pageData.front.startsWith("__")) {
         useTexture.preload(`/textures/${pageData.front}.jpg`);
       }
-      if (!pageData.back.startsWith("__")) {
+      if (pageData.back.length > 0 && !pageData.back.startsWith("__")) {
         useTexture.preload(`/textures/${pageData.back}.jpg`);
       }
     }
@@ -1203,7 +1240,7 @@ export const Book3D = ({
             || Math.abs(sheetAnchorIndex - index) <= textureLoadRadius;
 
           return (
-            <Page
+            <MemoizedPage
               key={index}
               number={index}
               page={delayedPage}
@@ -1230,6 +1267,8 @@ export const Book3D = ({
               largeBookFanSpreadDeg={largeBookFanSpreadDeg}
               onBookClick={onBookClick}
               interactionDisabled={interactionDisabled}
+              pageSegments={pageSegments}
+              minPage={minPage}
 
             />
           );

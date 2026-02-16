@@ -2,7 +2,7 @@
 
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, useFrame, useThree, ThreeElements } from '@react-three/fiber';
-import { Html, SpotLight, useDetectGPU, useGLTF } from '@react-three/drei';
+import { Html, SpotLight, useDetectGPU, useGLTF, useProgress, useTexture } from '@react-three/drei';
 import { Bloom, EffectComposer, Vignette } from '@react-three/postprocessing';
 import {
   ACESFilmicToneMapping,
@@ -18,7 +18,7 @@ import {
   Vector3,
 } from 'three';
 import { Book3D, createBookAtom } from './Book3D';
-import { useSetAtom } from 'jotai';
+import { useAtom, useSetAtom, useAtomValue } from 'jotai';
 import { CoffeeSteam } from './CoffeeSteam';
 
 import { useBookSideTextures } from '@/lib/book-content/useBookSideTextures';
@@ -107,6 +107,10 @@ const DESK_PLAQUE_ROTATION_RAD: [number, number, number] = [
   MathUtils.degToRad(DESK_PLAQUE_ROTATION_DEG[2]),
 ];
 
+// Back button positions
+const BOOK1_BACK_BUTTON_POSITION: [number, number, number] = [0.8, 0.02, 0.33];
+const BOOK2_BACK_BUTTON_POSITION: [number, number, number] = [1.05, 0.04, 0];
+
 
 
 const bookAtom = createBookAtom(0);
@@ -122,12 +126,41 @@ const pictures = [
   "DSC01489", "DSC02031", "DSC02064", "DSC02069",
 ];
 
+const CORE_MODEL_PATHS = [
+  '/models/mahogany_table/scene.gltf',
+  '/models/old_desk_lamp/scene.gltf',
+  '/models/simple_old_mug/scene.gltf',
+  '/models/mini_plant/scene.gltf',
+  '/models/ballpoin_golden/scene.gltf',
+] as const;
+
+const CORE_TEXTURE_PATHS = [
+  '/textures/book1-cover-front.webp',
+  '/textures/book1-cover-back.webp',
+] as const;
+
+if (typeof window !== 'undefined') {
+  CORE_MODEL_PATHS.forEach((path) => useGLTF.preload(path));
+  CORE_TEXTURE_PATHS.forEach((path) => useTexture.preload(path));
+}
+
 const createBookInteriorPages = (sheetCount: number) => {
   const generated: Array<{ front: string; back: string }> = [];
   for (let i = 0; i < sheetCount; i += 1) {
     generated.push({
       front: pictures[i % pictures.length],
       back: pictures[(i + 1) % pictures.length],
+    });
+  }
+  return generated;
+};
+
+const createBlankBookInteriorPages = (sheetCount: number) => {
+  const generated: Array<{ front: string; back: string }> = [];
+  for (let i = 0; i < sheetCount; i += 1) {
+    generated.push({
+      front: '',
+      back: '',
     });
   }
   return generated;
@@ -177,10 +210,10 @@ const SCENE_PROFILES: Record<SceneProfile["name"], SceneProfile> = {
   },
   desktop: {
     name: "desktop",
-    dpr: [1, 1.5],
+    dpr: [1, 1.25],
     antialias: true,
     enableShadows: true,
-    shadowMapSize: 1024,
+    shadowMapSize: 512,
     enableVolumetricLight: true,
     enablePostProcessing: true,
     renderSecondBook: true,
@@ -193,7 +226,8 @@ const SCENE_PROFILES: Record<SceneProfile["name"], SceneProfile> = {
     fifthBookSheetCount: 36,
     renderSteam: true,
     renderPlant: true,
-    bookTextureLoadRadius: Number.POSITIVE_INFINITY,
+    // Load nearby pages first so hero settles faster; farther pages stream on demand.
+    bookTextureLoadRadius: 8,
   },
 };
 
@@ -303,6 +337,9 @@ const ARC_END_RADIUS = Math.hypot(
 ); // ≈ 0.4
 
 const CAMERA_ARC_DURATION_MS = 1800;
+const HERO_LOADER_MIN_MS = 700;
+const HERO_REVEAL_DURATION_MS = 1200;
+const HERO_LOADER_MAX_PROGRESS_BEFORE_READY = 96;
 
 type CameraPhase = 'overview' | 'focusing' | 'focused' | 'book-closing' | 'unfocusing';
 const BOOK_CLOSE_DELAY_MS = 800;
@@ -331,6 +368,18 @@ interface CameraSetupProps {
   onTransitionDone: () => void;
 }
 
+interface SceneReadySignalProps {
+  onReady: () => void;
+}
+
+function SceneReadySignal({ onReady }: SceneReadySignalProps) {
+  useEffect(() => {
+    onReady();
+  }, [onReady]);
+
+  return null;
+}
+
 function CameraSetup({ phase, onTransitionDone }: CameraSetupProps) {
   const { camera } = useThree();
   const phaseRef = useRef<CameraPhase>(phase);
@@ -338,10 +387,12 @@ function CameraSetup({ phase, onTransitionDone }: CameraSetupProps) {
   const doneRef = useRef(false);
   const tempPos = useRef(new Vector3());
   const tempTarget = useRef(new Vector3());
+  const staticSetRef = useRef(false);
 
   // Sync prop → ref synchronously (runs every render, before useFrame)
   if (phaseRef.current !== phase) {
     phaseRef.current = phase;
+    staticSetRef.current = false;
     if (phase === 'focusing' || phase === 'unfocusing') {
       animStartRef.current = null; // will be set on first frame
       doneRef.current = false;
@@ -359,14 +410,20 @@ function CameraSetup({ phase, onTransitionDone }: CameraSetupProps) {
     const p = phaseRef.current;
 
     if (p === 'overview') {
-      camera.position.copy(OVERVIEW_CAMERA_POSITION);
-      camera.lookAt(OVERVIEW_CAMERA_TARGET);
+      if (!staticSetRef.current) {
+        camera.position.copy(OVERVIEW_CAMERA_POSITION);
+        camera.lookAt(OVERVIEW_CAMERA_TARGET);
+        staticSetRef.current = true;
+      }
       return;
     }
 
     if (p === 'focused' || p === 'book-closing') {
-      camera.position.copy(BOOK_FOCUS_CAMERA_POSITION);
-      camera.lookAt(BOOK_FOCUS_CAMERA_TARGET);
+      if (!staticSetRef.current) {
+        camera.position.copy(BOOK_FOCUS_CAMERA_POSITION);
+        camera.lookAt(BOOK_FOCUS_CAMERA_TARGET);
+        staticSetRef.current = true;
+      }
       return;
     }
 
@@ -552,7 +609,7 @@ function CoffeeMug({ steamEnabled, enableShadows, ...props }: CoffeeMugProps) {
         <circleGeometry args={[0.145, 32]} />
         <meshStandardMaterial color="#0f0802" roughness={0.2} metalness={0.1} />
       </mesh>
-      {steamEnabled && <CoffeeSteam position={[0, 0.46, 0]} scale={[0.5, 0.5, 0.5]} />}
+      {steamEnabled && <CoffeeSteam />}
     </group>
   );
 }
@@ -639,12 +696,62 @@ function DeskNamePlaque({ enableShadows, nameText = 'Akmal Hasan Mulyadi', ...pr
   );
 }
 
+function BookLabel({
+  position,
+  text,
+  visible
+}: {
+  position: [number, number, number],
+  text: string,
+  visible: boolean
+}) {
+  return (
+    <group position={position}>
+      <Html
+        center
+        style={{
+          pointerEvents: 'none',
+          transition: 'opacity 0.5s',
+          opacity: visible ? 1 : 0,
+          whiteSpace: 'nowrap',
+          zIndex: 0
+        }}
+      >
+        <div className="flex flex-col items-center gap-1 select-none">
+          <span
+            style={{
+              fontFamily: 'var(--font-caveat), "Caveat", cursive',
+              fontSize: '1.5rem',
+              color: '#ead4a1',
+              textShadow: '0 2px 4px rgba(0,0,0,0.8)',
+              fontWeight: 700
+            }}
+          >
+            {text}
+          </span>
+          <span
+            className="animate-bounce"
+            style={{
+              color: '#ead4a1',
+              fontSize: '1.5rem',
+              textShadow: '0 2px 4px rgba(0,0,0,0.8)'
+            }}
+          >
+            ↓
+          </span>
+        </div>
+      </Html>
+    </group>
+  );
+}
+
 interface InteractiveBooksProps {
   renderSecondBook: boolean;
   renderThirdBook: boolean;
   renderFourthBook: boolean;
   renderFifthBook: boolean;
   enableShadows: boolean;
+  labelsVisible: boolean;
   textureLoadRadius: number;
   book2Pages: Array<{ front: string; back: string }>;
   book3Pages: Array<{ front: string; back: string }>;
@@ -663,6 +770,7 @@ function InteractiveBooks({
   renderFourthBook,
   renderFifthBook,
   enableShadows,
+  labelsVisible,
   textureLoadRadius,
   book2Pages,
   book3Pages,
@@ -673,11 +781,21 @@ function InteractiveBooks({
   book2ProfileImageUrl,
   bookFocused,
   onBookFocus,
-}: InteractiveBooksProps) {
+  spotlightBook,
+  onSpotlightChange,
+}: InteractiveBooksProps & {
+  spotlightBook: BookId;
+  onSpotlightChange: (id: BookId) => void;
+}) {
   const book1GroupRef = useRef<Group | null>(null);
   const book2GroupRef = useRef<Group | null>(null);
-  const spotlightBookRef = useRef<BookId>('book1');
-  const [spotlightBook, setSpotlightBook] = useState<BookId>('book1');
+  const spotlightBookRef = useRef<BookId>(spotlightBook);
+
+  // Sync ref with prop for useFrame and event handlers
+  useEffect(() => {
+    spotlightBookRef.current = spotlightBook;
+  }, [spotlightBook]);
+
   const swapAnimationRef = useRef<{ startedAtMs: number; spotlightBeforeSwap: BookId } | null>(null);
   const [isSwapping, setIsSwapping] = useState(false);
 
@@ -787,7 +905,7 @@ function InteractiveBooks({
     if (rawProgress >= 1) {
       const newSpotlight = swapAnimation.spotlightBeforeSwap === 'book1' ? 'book2' : 'book1';
       spotlightBookRef.current = newSpotlight;
-      setSpotlightBook(newSpotlight);
+      onSpotlightChange(newSpotlight);
       swapAnimationRef.current = null;
       setIsSwapping(false);
     }
@@ -804,8 +922,8 @@ function InteractiveBooks({
         <Book3D
           bookAtom={bookAtom}
           coverColor="#4a3020"
-          coverFrontTexturePath="/textures/book1-cover-front.png"
-          coverBackTexturePath="/textures/book1-cover-back.png"
+          coverFrontTexturePath="/textures/book1-cover-front.webp"
+          coverBackTexturePath="/textures/book1-cover-back.webp"
           spineBaseOffset={[-0.07, -0.002, 0.012]}
           coverFrontTextureOffsetY={0}
           enableShadows={enableShadows}
@@ -815,6 +933,12 @@ function InteractiveBooks({
           onBookClick={() => handleBookClick('book1')}
           interactionDisabled={isSwapping || (bookFocused && spotlightBook !== 'book1')}
           onThicknessChange={setBook1Thickness}
+          minPage={bookFocused && spotlightBook === 'book1' ? 1 : 0}
+        />
+        <BookLabel
+          position={[0, 0, 0.6]}
+          text="Portfolio"
+          visible={labelsVisible && !bookFocused && !isSwapping}
         />
       </group>
 
@@ -838,6 +962,12 @@ function InteractiveBooks({
             onBookClick={() => handleBookClick('book2')}
             interactionDisabled={isSwapping || (bookFocused && spotlightBook !== 'book2')}
             onThicknessChange={setBook2Thickness}
+            minPage={bookFocused && spotlightBook === 'book2' ? 1 : 0}
+          />
+          <BookLabel
+            position={[0, 0, 0.6]}
+            text="About"
+            visible={labelsVisible && !bookFocused && !isSwapping}
           />
         </group>
       )}
@@ -856,6 +986,7 @@ function InteractiveBooks({
             textureLoadRadius={textureLoadRadius}
             largeBookFanSpreadDeg={8}
             interactionDisabled={true}
+            pageSegments={8}
           />
         </group>
       )}
@@ -874,6 +1005,7 @@ function InteractiveBooks({
             textureLoadRadius={textureLoadRadius}
             largeBookFanSpreadDeg={8}
             interactionDisabled={true}
+            pageSegments={8}
           />
         </group>
       )}
@@ -892,6 +1024,7 @@ function InteractiveBooks({
             textureLoadRadius={textureLoadRadius}
             largeBookFanSpreadDeg={8}
             interactionDisabled={true}
+            pageSegments={8}
           />
         </group>
       )}
@@ -903,17 +1036,139 @@ export default function Hero() {
   const lampSpotRef = useRef<SpotLightImpl | null>(null);
   const lampTargetRef = useRef<Object3D | null>(null);
   const gpu = useDetectGPU();
+  const { active: assetsLoading, progress: loadingProgress } = useProgress();
+  const heroBootAtRef = useRef<number>(0);
+  const loaderProgressRef = useRef(0);
+
+  const [gpuDetectTimedOut, setGpuDetectTimedOut] = useState(false);
+  const [resolvedProfileName, setResolvedProfileName] = useState<SceneProfile["name"] | null>(null);
+  const [sceneAssetsReady, setSceneAssetsReady] = useState(false);
+  const [loaderProgressPercent, setLoaderProgressPercent] = useState(0);
+  const [showLoaderOverlay, setShowLoaderOverlay] = useState(true);
+  const [revealStarted, setRevealStarted] = useState(false);
+
+  const profileResolved = resolvedProfileName !== null;
+  const sceneProfile = profileResolved
+    ? SCENE_PROFILES[resolvedProfileName]
+    : SCENE_PROFILES.mobile;
+  const isLowEndDevice = sceneProfile.name === 'mobile';
+
+  useEffect(() => {
+    if (gpu || gpuDetectTimedOut) {
+      return;
+    }
+
+    const timer = setTimeout(() => setGpuDetectTimedOut(true), 1400);
+    return () => clearTimeout(timer);
+  }, [gpu, gpuDetectTimedOut]);
+
+  useEffect(() => {
+    if (resolvedProfileName) {
+      return;
+    }
+    if (!gpu && !gpuDetectTimedOut) {
+      return;
+    }
+
+    const gpuSuggestsLowEnd = !gpu || gpu.isMobile || gpu.tier <= 1;
+    setResolvedProfileName(gpuSuggestsLowEnd ? 'mobile' : 'desktop');
+  }, [gpu, gpuDetectTimedOut, resolvedProfileName]);
+
+  useEffect(() => {
+    heroBootAtRef.current = performance.now();
+  }, []);
+
+  const handleSceneAssetsReady = useCallback(() => {
+    setSceneAssetsReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!profileResolved || sceneAssetsReady) {
+      return;
+    }
+    if (!assetsLoading && loaderProgressRef.current === 0) {
+      return;
+    }
+
+    const nextProgress = Math.max(
+      loaderProgressRef.current,
+      Math.min(
+        HERO_LOADER_MAX_PROGRESS_BEFORE_READY,
+        Math.max(0, Math.round(loadingProgress)),
+      ),
+    );
+
+    if (nextProgress !== loaderProgressRef.current) {
+      loaderProgressRef.current = nextProgress;
+      setLoaderProgressPercent(nextProgress);
+    }
+  }, [assetsLoading, loadingProgress, profileResolved, sceneAssetsReady]);
+
+  useEffect(() => {
+    if (!sceneAssetsReady) {
+      return;
+    }
+
+    loaderProgressRef.current = 100;
+    setLoaderProgressPercent(100);
+  }, [sceneAssetsReady]);
+
+  useEffect(() => {
+    if (!showLoaderOverlay || revealStarted) {
+      return;
+    }
+    if (!profileResolved || !sceneAssetsReady) {
+      return;
+    }
+
+    const elapsed = performance.now() - heroBootAtRef.current;
+    const delay = Math.max(0, HERO_LOADER_MIN_MS - elapsed);
+    const timer = setTimeout(() => setRevealStarted(true), delay);
+
+    return () => clearTimeout(timer);
+  }, [profileResolved, sceneAssetsReady, revealStarted, showLoaderOverlay]);
+
+  useEffect(() => {
+    if (!revealStarted) {
+      return;
+    }
+
+    const timer = setTimeout(() => setShowLoaderOverlay(false), HERO_REVEAL_DURATION_MS);
+    return () => clearTimeout(timer);
+  }, [revealStarted]);
 
   // Camera focus state
   const [cameraPhase, setCameraPhase] = useState<CameraPhase>('overview');
   const bookFocused = cameraPhase === 'focused' || cameraPhase === 'focusing';
-  const setSpotlightPage = useSetAtom(bookAtom);
+
+
+  const [spotlightBook, setSpotlightBook] = useState<BookId>('book1');
+
+  // Get current page of the spotlight book to hide back button when page is flipped
+  const activeBookAtom = useMemo(() => {
+    switch (spotlightBook) {
+      case 'book2': return book2Atom;
+      case 'book3': return book3Atom;
+      case 'book4': return book4Atom;
+      case 'book5': return book5Atom;
+      default: return bookAtom;
+    }
+  }, [spotlightBook]);
+  const currentSpotlightPage = useAtomValue(activeBookAtom);
+
+  // Use the dynamic atom for the setter
+  const setSpotlightPage = useSetAtom(activeBookAtom);
 
   // Auto-open front cover when camera focuses on the book
   const [showBackButton, setShowBackButton] = useState(false);
   useEffect(() => {
     if (cameraPhase === 'focused') {
-      setSpotlightPage(1); // Open front cover
+      if (spotlightBook === 'book2') {
+        // Open to the middle page for Book 2
+        setSpotlightPage(Math.floor(book2Pages.length / 2));
+      } else {
+        setSpotlightPage(1); // Open front cover for others
+      }
       // Show the back button after the book has fully opened
       const timer = setTimeout(() => setShowBackButton(true), 1400);
       return () => clearTimeout(timer);
@@ -949,12 +1204,8 @@ export default function Hero() {
     });
   }, []);
 
-  const isLowEndDevice = !gpu || gpu.isMobile || gpu.tier <= 1;
-  const sceneProfile = isLowEndDevice
-    ? SCENE_PROFILES.mobile
-    : SCENE_PROFILES.desktop;
   const book2Pages = useMemo(
-    () => createBookInteriorPages(sceneProfile.secondBookSheetCount),
+    () => createBlankBookInteriorPages(sceneProfile.secondBookSheetCount),
     [sceneProfile.secondBookSheetCount],
   );
   const book3Pages = useMemo(
@@ -985,7 +1236,7 @@ export default function Hero() {
     totalPageEntries: book2Pages.length + 2, // interior sheets + 2 covers
     canvasHeight: isLowEndDevice ? 1024 : 1536,
     textureLoadRadius: sceneProfile.bookTextureLoadRadius,
-    enabled: sceneProfile.renderSecondBook,
+    enabled: false, // sceneProfile.renderSecondBook,
   });
   const book2ProfileImageUrl = useBookProfileImage({
     bookKey: "book-2",
@@ -1062,72 +1313,76 @@ export default function Hero() {
           decay={2}
         />
 
-        <Suspense fallback={<group><mesh><boxGeometry args={[1, 1, 1]} /><meshStandardMaterial color="gray" wireframe /></mesh></group>}>
-          <Model
-            path="/models/mahogany_table/scene.gltf"
-            position={[0, -2.1, 0]}
-            scale={0.3}
-            rotation={[0, 0, 0]}
-            enableShadows={sceneProfile.enableShadows}
-          />
-          <DeskLampModel
-            position={LAMP_POSITION}
-            scale={LAMP_SCALE}
-            rotation={LAMP_ROTATION}
-            lightsOn={true}
-            enableShadows={sceneProfile.enableShadows}
-          />
-
-          <InteractiveBooks
-            renderSecondBook={sceneProfile.renderSecondBook}
-            renderThirdBook={sceneProfile.renderThirdBook}
-            renderFourthBook={sceneProfile.renderFourthBook}
-            renderFifthBook={sceneProfile.renderFifthBook}
-            enableShadows={sceneProfile.enableShadows}
-            textureLoadRadius={sceneProfile.bookTextureLoadRadius}
-            book2Pages={book2Pages}
-            book3Pages={book3Pages}
-            book4Pages={book4Pages}
-            book5Pages={book5Pages}
-            book1DynamicContent={book1DynamicContent}
-            book2DynamicContent={book2DynamicContent}
-            book2ProfileImageUrl={book2ProfileImageUrl}
-            bookFocused={bookFocused}
-            onBookFocus={handleBookFocus}
-          />
-
-
-
-          <CoffeeMug
-            steamEnabled={sceneProfile.renderSteam}
-            enableShadows={sceneProfile.enableShadows}
-            position={[1.3, 0.04, -0.6]}
-            rotation={[0, Math.PI / -2, 0]}
-          />
-          <DeskNamePlaque
-            enableShadows={sceneProfile.enableShadows}
-            position={DESK_PLAQUE_POSITION}
-            rotation={DESK_PLAQUE_ROTATION_RAD}
-            scale={DESK_PLAQUE_SCALE}
-            nameText="Akmal Hasan Mulyadi"
-          />
-          {sceneProfile.renderPlant && (
+        {profileResolved && (
+          <Suspense fallback={null} key={sceneProfile.name}>
             <Model
-              path="/models/mini_plant/scene.gltf"
-              position={[-1, -0.15, 0.8]}
-              scale={2}
-              rotation={[0, 2, 0]}
+              path="/models/mahogany_table/scene.gltf"
+              position={[0, -2.1, 0]}
+              scale={0.3}
+              rotation={[0, 0, 0]}
               enableShadows={sceneProfile.enableShadows}
             />
-          )}
-          <Model
-            path="/models/ballpoin_golden/scene.gltf"
-            position={[1, 0.16, 0.1]}
-            scale={0.3}
-            rotation={[0, 0.5, 1.57]}
-            enableShadows={sceneProfile.enableShadows}
-          />
-        </Suspense>
+            <DeskLampModel
+              position={LAMP_POSITION}
+              scale={LAMP_SCALE}
+              rotation={LAMP_ROTATION}
+              lightsOn={true}
+              enableShadows={sceneProfile.enableShadows}
+            />
+
+            <InteractiveBooks
+              renderSecondBook={sceneProfile.renderSecondBook}
+              renderThirdBook={sceneProfile.renderThirdBook}
+              renderFourthBook={sceneProfile.renderFourthBook}
+              renderFifthBook={sceneProfile.renderFifthBook}
+              enableShadows={sceneProfile.enableShadows}
+              labelsVisible={!showLoaderOverlay}
+              textureLoadRadius={sceneProfile.bookTextureLoadRadius}
+              book2Pages={book2Pages}
+              book3Pages={book3Pages}
+              book4Pages={book4Pages}
+              book5Pages={book5Pages}
+              book1DynamicContent={book1DynamicContent}
+              book2DynamicContent={book2DynamicContent}
+              book2ProfileImageUrl={book2ProfileImageUrl}
+              bookFocused={bookFocused}
+              onBookFocus={handleBookFocus}
+              spotlightBook={spotlightBook}
+              onSpotlightChange={setSpotlightBook}
+            />
+
+            <CoffeeMug
+              steamEnabled={sceneProfile.renderSteam}
+              enableShadows={sceneProfile.enableShadows}
+              position={[1.3, 0.04, -0.6]}
+              rotation={[0, Math.PI / -2, 0]}
+            />
+            <DeskNamePlaque
+              enableShadows={sceneProfile.enableShadows}
+              position={DESK_PLAQUE_POSITION}
+              rotation={DESK_PLAQUE_ROTATION_RAD}
+              scale={DESK_PLAQUE_SCALE}
+              nameText="Akmal Hasan Mulyadi"
+            />
+            {sceneProfile.renderPlant && (
+              <Model
+                path="/models/mini_plant/scene.gltf"
+                position={[-1, -0.15, 0.8]}
+                scale={2}
+                rotation={[0, 2, 0]}
+                enableShadows={sceneProfile.enableShadows}
+              />
+            )}
+            <Model
+              path="/models/ballpoin_golden/scene.gltf"
+              position={[1, 0.16, 0.1]}
+              scale={0.3}
+              rotation={[0, 0.5, 1.57]}
+              enableShadows={sceneProfile.enableShadows}
+            />
+            <SceneReadySignal onReady={handleSceneAssetsReady} />
+          </Suspense>
+        )}
         {sceneProfile.enablePostProcessing && (
           <EffectComposer enableNormalPass={false} multisampling={0}>
             <Bloom luminanceThreshold={1.2} mipmapBlur intensity={0.25} />
@@ -1139,11 +1394,11 @@ export default function Hero() {
 
         {/* 3D Home button — on the left page (back of front cover), vintage style */}
         {(cameraPhase === 'focused') && (
-          <group position={[0.8, 0.02, 0.33]}>
+          <group position={spotlightBook === 'book2' ? BOOK2_BACK_BUTTON_POSITION : BOOK1_BACK_BUTTON_POSITION}>
             <Html
               center
               distanceFactor={1.0}
-              style={{ pointerEvents: showBackButton ? 'auto' : 'none' }}
+              style={{ pointerEvents: showBackButton && (spotlightBook === 'book2' || currentSpotlightPage <= 1) ? 'auto' : 'none' }}
               zIndexRange={[100, 0]}
             >
               <button
@@ -1156,7 +1411,7 @@ export default function Hero() {
                   borderRadius: '4px',
                   background: 'transparent',
                   border: 'none',
-                  color: '#5a3e28',
+                  color: spotlightBook === 'book2' ? '#ffffff' : '#5a3e28',
                   cursor: 'pointer',
                   fontSize: '22px',
                   fontFamily: 'var(--font-caveat), "Caveat", cursive',
@@ -1165,16 +1420,16 @@ export default function Hero() {
                   letterSpacing: '0.5px',
                   textDecoration: 'none',
                   transition: 'opacity 0.6s ease, color 0.3s',
-                  textShadow: '0 1px 2px rgba(90,62,40,0.15)',
-                  opacity: showBackButton ? 1 : 0,
+                  textShadow: spotlightBook === 'book2' ? '0 1px 3px rgba(0,0,0,0.6)' : '0 1px 2px rgba(90,62,40,0.15)',
+                  opacity: showBackButton && (spotlightBook === 'book2' || currentSpotlightPage <= 1) ? 1 : 0,
                 }}
                 onMouseEnter={(e) => {
-                  e.currentTarget.style.color = '#3a2010';
+                  e.currentTarget.style.color = spotlightBook === 'book2' ? '#e0e0e0' : '#3a2010';
                   e.currentTarget.style.textDecoration = 'underline';
                   e.currentTarget.style.textUnderlineOffset = '4px';
                 }}
                 onMouseLeave={(e) => {
-                  e.currentTarget.style.color = '#5a3e28';
+                  e.currentTarget.style.color = spotlightBook === 'book2' ? '#ffffff' : '#5a3e28';
                   e.currentTarget.style.textDecoration = 'none';
                 }}
               >
@@ -1184,6 +1439,45 @@ export default function Hero() {
           </group>
         )}
       </Canvas>
+
+      {showLoaderOverlay && (
+        <div
+          className={`pointer-events-none absolute inset-0 z-20 overflow-hidden transition-opacity duration-700 ${revealStarted ? 'opacity-0' : 'opacity-100'
+            }`}
+        >
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(20,20,20,0.7),rgba(5,5,5,1))]" />
+          <div
+            className={`absolute inset-x-0 top-0 h-1/2 bg-[#050505] transition-all duration-[1200ms] ease-[cubic-bezier(0.2,0.9,0.2,1)] ${revealStarted ? '-translate-y-full opacity-0' : 'translate-y-0 opacity-100'
+              }`}
+          />
+          <div
+            className={`absolute inset-x-0 bottom-0 h-1/2 bg-[#050505] transition-all duration-[1200ms] ease-[cubic-bezier(0.2,0.9,0.2,1)] ${revealStarted ? 'translate-y-full opacity-0' : 'translate-y-0 opacity-100'
+              }`}
+          />
+
+          <div
+            className={`absolute inset-0 flex flex-col items-center justify-center gap-4 transition-all duration-500 ${revealStarted ? 'scale-95 opacity-0' : 'scale-100 opacity-100'
+              }`}
+          >
+            <div className="h-14 w-14 animate-spin rounded-full border border-[#f5e4c0]/20 border-t-[#f5e4c0]/90" />
+            <div className="h-1.5 w-40 overflow-hidden rounded-full bg-white/10">
+              <div
+                className="h-full rounded-full bg-[#f5e4c0]/80 transition-[width] duration-300"
+                style={{ width: `${loaderProgressPercent}%` }}
+              />
+            </div>
+            <p className="text-[11px] uppercase tracking-[0.28em] text-[#f5e4c0]/70">
+              {!profileResolved
+                ? 'Optimizing Device'
+                : sceneAssetsReady
+                  ? 'Opening Scene'
+                  : assetsLoading
+                    ? 'Loading Scene'
+                    : 'Preparing Scene'}
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -2,66 +2,88 @@ import { ThreeElements, useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
 
+// Billboard Vertex Shader
+// Transforms local corner vertices (of a quad) into View Space first,
+// effectively making the quad always face the camera.
 const vertexShader = `
-varying vec2 vUv;
 uniform float uTime;
+attribute float aOffset;
+attribute float aScale;
+attribute float aRotation;
+attribute vec3 aVelocity;
+attribute float aLife;
 
-// 3D Simplex Noise (Use a library or include simplified implementation)
-// Simplified 2D noise for brevity in vertex displacement
-vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
-vec2 mod289(vec2 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
-vec3 permute(vec3 x) { return mod289(((x*34.0)+1.0)*x); }
-
-float snoise(vec2 v) {
-  const vec4 C = vec4(0.211324865405187, 0.366025403784439,
-           -0.577350269189626, 0.024390243902439);
-  vec2 i  = floor(v + dot(v, C.yy) );
-  vec2 x0 = v -   i + dot(i, C.xx);
-  vec2 i1;
-  i1 = (x0.x > x0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
-  vec4 x12 = x0.xyxy + C.xxzz;
-  x12.xy -= i1;
-  i = mod289(i);
-  vec3 p = permute( permute( i.y + vec3(0.0, i1.y, 1.0 ))
-  + i.x + vec3(0.0, i1.x, 1.0 ));
-  vec3 m = max(0.5 - vec3(dot(x0,x0), dot(x12.xy,x12.xy), dot(x12.zw,x12.zw)), 0.0);
-  m = m*m ;
-  m = m*m ;
-  vec3 x = 2.0 * fract(p * C.www) - 1.0;
-  vec3 h = abs(x) - 0.5;
-  vec3 ox = floor(x + 0.5);
-  vec3 a0 = x - ox;
-  m *= 1.79284291400159 - 0.85373472095314 * ( a0*a0 + h*h );
-  vec3 g;
-  g.x  = a0.x  * x0.x  + h.x  * x0.y;
-  g.yz = a0.yz * x12.xz + h.yz * x12.yw;
-  return 130.0 * dot(m, g);
-}
+varying vec2 vUv;
+varying float vAlpha;
+varying float vOffset;
 
 void main() {
   vUv = uv;
-  vec3 pos = position;
+  vOffset = aOffset;
+
+  // Calculate life progress (0.0 to 1.0) based on time and offset
+  // We use uTime and aOffset to create a continuous loop
+  float lifeDuration = 8.0; // Faster (but still slow) to correct "static" look
+  float time = uTime + aOffset;
+  float progress = mod(time, lifeDuration) / lifeDuration;
   
-  // Wiggle effect increasing with height
-  float noiseVal = snoise(vec2(pos.y * 1.5 - uTime * 0.5, uTime * 0.2));
-  pos.x += noiseVal * 0.3 * smoothstep(0.0, 1.0, uv.y); 
+  // Fade in faster, fade out smoother
+  vAlpha = smoothstep(0.0, 0.2, progress) * (1.0 - smoothstep(0.6, 1.0, progress));
   
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+  // Calculate position
+  // Move up (y) and slightly outward (x, z)
+  vec3 pos = vec3(0.0);
+  
+  // Initial random spread at base
+  // We use aVelocity as a random seed for initial position too
+  float randomAngle = aRotation * 6.28;
+  float randomRadius = length(aVelocity.xz) * 0.05; // Starting point is tight (cup center)
+  pos.x += cos(randomAngle) * randomRadius;
+  pos.z += sin(randomAngle) * randomRadius;
+  
+  // Upward movement
+  pos.y += progress * 1.8; // Rise height
+  
+  // S-Curve distortion for "swirl"
+  float sway = sin(progress * 10.0 + aOffset) * 0.1 * progress;
+  pos.x += sway;
+  
+  // Outward expansion (diffusion)
+  float expansion = progress * 0.5; // How wide it gets
+  pos.x += (aVelocity.x * expansion);
+  pos.z += (aVelocity.z * expansion);
+  
+  // Scale increases with age
+  // Elongate vertically for "streak" look
+  float currentScaleX = aScale * (0.5 + progress * 1.0); 
+  float currentScaleY = currentScaleX * 2.0; // Taller than wide
+  
+  // Billboard Logic
+  // 1. Get model view position of the center
+  vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+  
+  // 2. Add vertex offset scaled by size (camera facing)
+  // Since we are in View Space, the camera is at (0,0,0) looking down -Z.
+  // The plane's local x/y are aligned with view x/y.
+  mvPosition.x += position.x * currentScaleX;
+  mvPosition.y += position.y * currentScaleY;
+  
+  gl_Position = projectionMatrix * mvPosition;
 }
 `;
 
 const fragmentShader = `
 varying vec2 vUv;
-uniform float uTime;
+varying float vAlpha;
+varying float vOffset;
 uniform vec3 uColor;
-uniform float uOpacity;
+uniform float uTime;
 
-// 2D Noise again for fragment
-vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
-vec2 mod289(vec2 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
-vec3 permute(vec3 x) { return mod289(((x*34.0)+1.0)*x); }
+// Simplex 2D noise
+// From: https://github.com/patriciogonzalezvivo/thebookofshaders/blob/master/glsl/noise/snoise.glsl
+vec3 permute(vec3 x) { return mod(((x*34.0)+1.0)*x, 289.0); }
 
-float snoise(vec2 v) {
+float snoise(vec2 v){
   const vec4 C = vec4(0.211324865405187, 0.366025403784439,
            -0.577350269189626, 0.024390243902439);
   vec2 i  = floor(v + dot(v, C.yy) );
@@ -70,7 +92,7 @@ float snoise(vec2 v) {
   i1 = (x0.x > x0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
   vec4 x12 = x0.xyxy + C.xxzz;
   x12.xy -= i1;
-  i = mod289(i);
+  i = mod((i), 289.0);
   vec3 p = permute( permute( i.y + vec3(0.0, i1.y, 1.0 ))
   + i.x + vec3(0.0, i1.x, 1.0 ));
   vec3 m = max(0.5 - vec3(dot(x0,x0), dot(x12.xy,x12.xy), dot(x12.zw,x12.zw)), 0.0);
@@ -87,14 +109,14 @@ float snoise(vec2 v) {
   return 130.0 * dot(m, g);
 }
 
-// Simple FBM for smoke detail
+// FBM (Fractal Brownian Motion)
 float fbm(vec2 x) {
 	float v = 0.0;
 	float a = 0.5;
 	vec2 shift = vec2(100.0);
-	// Rotate to reduce axial bias
+	// Basic rotation matrix
     mat2 rot = mat2(cos(0.5), sin(0.5), -sin(0.5), cos(0.50));
-	for (int i = 0; i < 4; ++i) {
+	for (int i = 0; i < 3; ++i) { // 3 Octaves
 		v += a * snoise(x);
 		x = rot * x * 2.0 + shift;
 		a *= 0.5;
@@ -103,58 +125,113 @@ float fbm(vec2 x) {
 }
 
 void main() {
+  // Center coordinates
   vec2 uv = vUv;
   
-  // Upward movement
-  float moveSpeed = 0.4;
-  vec2 noiseUV = uv;
-  noiseUV.y -= uTime * moveSpeed;
+  // Time offset from particle distinct offset
+  float time = uTime * 0.5 + vOffset;
   
-  float noiseVal = fbm(noiseUV * 3.0);
+  // Rising coordinates
+  vec2 noiseUV = uv * vec2(1.0, 2.0) - vec2(0.0, time);
   
-  // Shape the smoke (column-like)
-  float centerDist = abs(uv.x - 0.5) * 2.0;
-  float shape = 1.0 - smoothstep(0.0, 1.0, centerDist);
+  // FBM Noise pattern
+  // Multiply by high frequency to get "wispy strands"
+  float noise = fbm(noiseUV * 3.0);
   
-  // Fade bottom and top
-  float verticalFade = smoothstep(0.0, 0.2, uv.y) * (1.0 - smoothstep(0.7, 1.0, uv.y));
+  // Remap noise
+  noise = noise * 0.5 + 0.5;
   
-  float alpha = noiseVal * shape * verticalFade * uOpacity;
+  // Shape masking:
+  // Instead of a circle, use a vertical "snake" or "column"
+  // Horizontal fade (sides)
+  float distX = abs(uv.x - 0.5);
+  float maskX = 1.0 - smoothstep(0.0, 0.4, distX);
   
-  // Make it wispy
-  alpha = smoothstep(0.1, 0.8, alpha);
+  // Vertical fade (top/bottom softness within the quad itself)
+  // Fade in quickly at bottom (0.0 to 0.15)
+  // Constant fade out all the way to top (0.15 to 1.0) to make it disappear as it rises
+  float maskY = smoothstep(0.0, 0.15, uv.y) * (1.0 - smoothstep(0.15, 1.0, uv.y));
   
-  gl_FragColor = vec4(uColor, alpha * 0.6);
+  // Combine all
+  // High contrast on noise to make "strands" pop out from transparent background
+  // Increase threshold to thin out the smoke (only hottest parts visible)
+  float smokeShape = smoothstep(0.45, 1.0, noise * maskX); // Removed maskY here to apply it linearly
+  
+  // modulate alpha
+  // Apply fading maskY here
+  // Ultra subtle opacity
+  float finalAlpha = smokeShape * vAlpha * maskY * 0.08; 
+  
+  if (finalAlpha < 0.001) discard;
+  
+  gl_FragColor = vec4(uColor, finalAlpha);
 }
 `;
 
-export const CoffeeSteam = (props: ThreeElements["mesh"]) => {
-    const materialRef = useRef<THREE.ShaderMaterial>(null);
+const PARTICLE_COUNT = 25; // Fewer particles, but more detailed individually
 
-    const uniforms = useMemo(() => ({
-        uTime: { value: 0 },
-        uColor: { value: new THREE.Color("#eeeeee") },
-        uOpacity: { value: 0.5 }
-    }), []);
+export const CoffeeSteam = (props: ThreeElements["group"]) => {
+  const meshRef = useRef<THREE.InstancedMesh>(null);
+  const materialRef = useRef<THREE.ShaderMaterial>(null);
 
-    useFrame((state) => {
-        if (materialRef.current) {
-            materialRef.current.uniforms.uTime.value = state.clock.getElapsedTime();
-        }
-    });
+  // Memoize uniforms to prevent recreation on re-render
+  // This ensures uTime persists across component re-renders
+  const uniforms = useMemo(() => ({
+    uTime: { value: 0 },
+    uColor: { value: new THREE.Color("#eeeeee") },
+  }), []);
 
-    return (
-        <mesh {...props}>
-            <planeGeometry args={[0.8, 2, 16, 16]} />
-            <shaderMaterial
-                ref={materialRef}
-                vertexShader={vertexShader}
-                fragmentShader={fragmentShader}
-                uniforms={uniforms}
-                transparent
-                depthWrite={false}
-                side={THREE.DoubleSide}
-            />
-        </mesh>
-    );
+  // Initialize attributes
+  const { offsets, scales, rotations, velocities } = useMemo(() => {
+    const offsets = new Float32Array(PARTICLE_COUNT);
+    const scales = new Float32Array(PARTICLE_COUNT);
+    const rotations = new Float32Array(PARTICLE_COUNT);
+    const velocities = new Float32Array(PARTICLE_COUNT * 3);
+
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+      offsets[i] = Math.random() * 4.0;
+      scales[i] = 0.6 + Math.random() * 0.4; // Smaller base scale
+      rotations[i] = Math.random();
+
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 0.1 + Math.random() * 0.2;
+      velocities[i * 3] = Math.cos(angle) * speed;
+      velocities[i * 3 + 1] = 0.0;
+      velocities[i * 3 + 2] = Math.sin(angle) * speed;
+    }
+
+    return { offsets, scales, rotations, velocities };
+  }, []);
+
+  const timeRef = useRef(0);
+
+  useFrame((state, delta) => {
+    if (materialRef.current) {
+      // Use delta to ensure continuous movement regardless of clock resets
+      timeRef.current += delta;
+      materialRef.current.uniforms.uTime.value = timeRef.current;
+    }
+  });
+
+  return (
+    <group {...props} position={[0.05, 0.38, 0.07]}>
+      <instancedMesh ref={meshRef} args={[undefined, undefined, PARTICLE_COUNT]}>
+        <planeGeometry args={[1, 1]}>
+          <instancedBufferAttribute attach="attributes-aOffset" args={[offsets, 1]} />
+          <instancedBufferAttribute attach="attributes-aScale" args={[scales, 1]} />
+          <instancedBufferAttribute attach="attributes-aRotation" args={[rotations, 1]} />
+          <instancedBufferAttribute attach="attributes-aVelocity" args={[velocities, 3]} />
+        </planeGeometry>
+        <shaderMaterial
+          ref={materialRef}
+          vertexShader={vertexShader}
+          fragmentShader={fragmentShader}
+          uniforms={uniforms}
+          transparent
+          depthWrite={false}
+          blending={THREE.NormalBlending}
+        />
+      </instancedMesh>
+    </group>
+  );
 };
