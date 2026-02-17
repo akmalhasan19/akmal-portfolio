@@ -1,9 +1,5 @@
 /* csslint-disable */
-@import "tailwindcss" source(none);
-@source "../app/**/*.{ts,tsx}";
-@source "../components/**/*.{ts,tsx}";
-@source "../lib/**/*.{ts,tsx}";
-@source "../types/**/*.{ts,tsx}";
+@import "tailwindcss";
 @source not "../app/admin/**/*.{ts,tsx}";
 @source not "../components/admin/**/*.{ts,tsx}";
 
