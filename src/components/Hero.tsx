@@ -30,6 +30,7 @@ import { CoffeeSteam } from './CoffeeSteam';
 
 import { useBookSideTextures } from '@/lib/book-content/useBookSideTextures';
 import { useBookProfileImage } from '@/lib/book-content/useBookProfileImage';
+import { BOOK2_CENTER_SPREAD_PIVOT } from '@/lib/book-content/book2-constraints';
 
 const caveat = Caveat({
   variable: '--font-caveat',
@@ -1116,6 +1117,12 @@ function InteractiveBooks({
   // Track book thickness for dynamic Y positioning
   const [book1Thickness, setBook1Thickness] = useState<number>(0);
   const [book2Thickness, setBook2Thickness] = useState<number>(0);
+  const book2CenterSpreadPivot = Math.floor(book2Pages.length / 2) + 1;
+  const isBook2Focused = bookFocused && spotlightBook === 'book2';
+  const book2LockedMinPage = isBook2Focused ? book2CenterSpreadPivot : 0;
+  const book2LockedMaxPage = isBook2Focused
+    ? book2CenterSpreadPivot
+    : Number.POSITIVE_INFINITY;
 
   const getSlotForBook = useCallback(
     (bookId: BookId, spotlightBook: BookId): BookSlot => (
@@ -1276,10 +1283,11 @@ function InteractiveBooks({
             frontCoverAvatarUrl={book2ProfileImageUrl ?? undefined}
             largeBookFanSpreadDeg={8}
             onBookClick={() => handleBookClick('book2')}
-            interactionDisabled={isSwapping || (bookFocused && spotlightBook !== 'book2')}
+            interactionDisabled={isSwapping || (bookFocused && spotlightBook === 'book2')}
             onThicknessChange={setBook2Thickness}
             pageSegments={PRIMARY_BOOK_PAGE_SEGMENTS}
-            minPage={bookFocused && spotlightBook === 'book2' ? 1 : 0}
+            minPage={book2LockedMinPage}
+            maxPage={book2LockedMaxPage}
             chainBackwardTurns={true}
           />
           <BookLabel
@@ -1539,8 +1547,8 @@ export default function Hero() {
   useEffect(() => {
     if (cameraPhase === 'focused') {
       if (spotlightBook === 'book2') {
-        // Open to the middle page for Book 2
-        setSpotlightPage(Math.floor(sceneProfile.secondBookSheetCount / 2));
+        // Lock to center spread for Book 2.
+        setSpotlightPage(BOOK2_CENTER_SPREAD_PIVOT);
       } else {
         setSpotlightPage(1); // Open front cover for others
       }
@@ -1558,7 +1566,7 @@ export default function Hero() {
     } else {
       setShowBackButton(false);
     }
-  }, [cameraPhase, setSpotlightPage, spotlightBook, sceneProfile.secondBookSheetCount]);
+  }, [cameraPhase, setSpotlightPage, spotlightBook]);
 
   const handleBookFocus = useCallback(() => {
     if (cameraPhase === 'overview') {

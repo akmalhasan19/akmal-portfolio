@@ -15,6 +15,11 @@ import {
 } from "@/lib/book-content/editor-atoms-book2";
 import type { PageSide, PageSideLayout } from "@/types/book-content";
 import { validateLayout } from "@/lib/book-content/validation";
+import { BOOK_PAPER_TONE, normalizePaperBackground } from "@/lib/book-content/paper-tone";
+import {
+    BOOK2_EDITABLE_CONTEXTS,
+    isBook2EditableContext,
+} from "@/lib/book-content/book2-constraints";
 import { PageNavigator } from "./PageNavigator";
 import { PageCanvasStage } from "./PageCanvasStage";
 import { BlockInspector } from "./BlockInspector";
@@ -36,6 +41,8 @@ interface PendingSave {
 export function Book2PageEditor() {
     const pageIndex = useAtomValue(selectedPageIndexAtom);
     const side = useAtomValue(selectedSideAtom);
+    const setPageIndex = useSetAtom(selectedPageIndexAtom);
+    const setSide = useSetAtom(selectedSideAtom);
     const [layout, setLayout] = useAtom(layoutDraftAtom);
     const setDirty = useSetAtom(dirtyAtom);
     const setSaving = useSetAtom(savingAtom);
@@ -55,6 +62,15 @@ export function Book2PageEditor() {
         contextRef.current = { pageIndex, side };
     }, [pageIndex, side]);
 
+    useEffect(() => {
+        if (isBook2EditableContext(pageIndex, side)) {
+            return;
+        }
+        const fallback = BOOK2_EDITABLE_CONTEXTS[0];
+        setPageIndex(fallback.sheetIndex);
+        setSide(fallback.side);
+    }, [pageIndex, setPageIndex, setSide, side]);
+
     const saveLayout = useCallback(
         async (
             layoutToSave: PageSideLayout,
@@ -65,6 +81,14 @@ export function Book2PageEditor() {
             if (!silent) {
                 setSaving(true);
                 setSaveError(null);
+            }
+
+            if (!isBook2EditableContext(context.pageIndex, context.side)) {
+                if (!silent) {
+                    setSaveError("Book 2 hanya bisa diedit pada 2 halaman tengah.");
+                    setSaving(false);
+                }
+                return;
             }
 
             const { layout: validated } = validateLayout(layoutToSave);
@@ -122,6 +146,12 @@ export function Book2PageEditor() {
     useEffect(() => {
         let cancelled = false;
 
+        if (!isBook2EditableContext(pageIndex, side)) {
+            return () => {
+                cancelled = true;
+            };
+        }
+
         const pending = pendingSaveRef.current;
         if (
             pending
@@ -152,9 +182,15 @@ export function Book2PageEditor() {
                 setSaveError("Gagal memuat layout.");
             }
 
-            const fetchedLayout: PageSideLayout = data?.layout ?? {
+            const fetchedLayoutRaw: PageSideLayout = data?.layout ?? {
                 blocks: [],
-                backgroundColor: "#ffffff",
+                backgroundColor: BOOK_PAPER_TONE,
+            };
+            const fetchedLayout: PageSideLayout = {
+                ...fetchedLayoutRaw,
+                backgroundColor: normalizePaperBackground(
+                    fetchedLayoutRaw.backgroundColor,
+                ),
             };
 
             setLayout(fetchedLayout);
@@ -170,11 +206,13 @@ export function Book2PageEditor() {
     }, [
         pageIndex,
         side,
+        setPageIndex,
         setLayout,
         setDirty,
         setLoading,
         setSaveError,
         setSaving,
+        setSide,
         flushPendingSaveInBackground,
     ]);
 

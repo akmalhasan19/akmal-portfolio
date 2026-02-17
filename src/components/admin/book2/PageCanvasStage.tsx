@@ -1,21 +1,28 @@
 "use client";
 
 import { useAtomValue, useSetAtom } from "jotai";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type {
     LayoutBlock,
     PageSideLayout,
     TextBlock,
     ImageBlock,
+    SvgBlock,
 } from "@/types/book-content";
 import { canAddBlock } from "@/lib/book-content/validation";
 import { selectedBlockIdAtom } from "@/lib/book-content/editor-atoms-book2";
+import { computeSafeArea } from "@/lib/book-content/padding";
+import { sanitizeSvgCode, svgToDataUrl } from "@/lib/book-content/svg-utils";
+import { normalizePaperBackground } from "@/lib/book-content/paper-tone";
+import { useBookProfileImage } from "@/lib/book-content/useBookProfileImage";
 
 // ── Constants ────────────────────────────────
 
 const CANVAS_DISPLAY_WIDTH = 600;
 const PAGE_ASPECT_RATIO = 1.71 / 1.28; // height / width from Book3D defaults
 const CANVAS_DISPLAY_HEIGHT = Math.round(CANVAS_DISPLAY_WIDTH * PAGE_ASPECT_RATIO);
+const REFERENCE_TEXTURE_HEIGHT = 1536;
+const REFERENCE_TEXTURE_WIDTH = Math.round(REFERENCE_TEXTURE_HEIGHT * (1.28 / 1.71));
 
 // ── Props ────────────────────────────────────
 
@@ -30,6 +37,7 @@ export function PageCanvasStage({
     layout,
     onLayoutChange,
 }: PageCanvasStageProps) {
+    const book2ProfileImageUrl = useBookProfileImage({ bookKey: "book-2" });
     const selectedBlockId = useAtomValue(selectedBlockIdAtom);
     const setSelectedBlockId = useSetAtom(selectedBlockIdAtom);
 
@@ -50,9 +58,36 @@ export function PageCanvasStage({
         origH: number;
     } | null>(null);
 
+    const safeArea = useMemo(
+        () =>
+            computeSafeArea(
+                CANVAS_DISPLAY_WIDTH,
+                CANVAS_DISPLAY_HEIGHT,
+                layout.paddingOverride,
+            ),
+        [layout.paddingOverride],
+    );
+
+    const referenceSafeArea = useMemo(
+        () =>
+            computeSafeArea(
+                REFERENCE_TEXTURE_WIDTH,
+                REFERENCE_TEXTURE_HEIGHT,
+                layout.paddingOverride,
+            ),
+        [layout.paddingOverride],
+    );
+
+    const textPreviewScale = useMemo(() => {
+        if (referenceSafeArea.h <= 0) {
+            return 1;
+        }
+        return safeArea.h / referenceSafeArea.h;
+    }, [referenceSafeArea.h, safeArea.h]);
+
     // ── Add block ──────────────────────────────
     const addBlock = useCallback(
-        (type: "text" | "image") => {
+        (type: "text" | "image" | "svg" | "profile") => {
             if (!canAddBlock(layout)) {
                 alert("Maksimal 8 blok per sisi halaman.");
                 return;
@@ -61,37 +96,66 @@ export function PageCanvasStage({
             const id = crypto.randomUUID();
             const maxZ = layout.blocks.reduce((max, b) => Math.max(max, b.zIndex), 0);
 
-            const newBlock: LayoutBlock =
-                type === "text"
-                    ? ({
-                        id,
-                        type: "text",
-                        x: 0.05,
-                        y: 0.05,
-                        w: 0.4,
-                        h: 0.15,
-                        zIndex: maxZ + 1,
-                        content: "Teks baru",
-                        style: {
-                            fontSize: 24,
-                            fontWeight: 400,
-                            textAlign: "left",
-                            color: "#000000",
-                            lineHeight: 1.4,
-                            fontFamily: "sans-serif",
-                        },
-                    } satisfies TextBlock)
-                    : ({
-                        id,
-                        type: "image",
-                        x: 0.05,
-                        y: 0.05,
-                        w: 0.4,
-                        h: 0.3,
-                        zIndex: maxZ + 1,
-                        assetPath: "",
-                        objectFit: "cover",
-                    } satisfies ImageBlock);
+            let newBlock: LayoutBlock;
+            if (type === "text") {
+                newBlock = {
+                    id,
+                    type: "text",
+                    x: 0.05,
+                    y: 0.05,
+                    w: 0.4,
+                    h: 0.15,
+                    zIndex: maxZ + 1,
+                    content: "Teks baru",
+                    style: {
+                        fontSize: 24,
+                        fontWeight: 400,
+                        textAlign: "left",
+                        color: "#000000",
+                        lineHeight: 1.4,
+                        fontFamily: "sans-serif",
+                    },
+                } satisfies TextBlock;
+            } else if (type === "image") {
+                newBlock = {
+                    id,
+                    type: "image",
+                    x: 0.05,
+                    y: 0.05,
+                    w: 0.4,
+                    h: 0.3,
+                    zIndex: maxZ + 1,
+                    assetPath: "",
+                    objectFit: "cover",
+                    shape: "rect",
+                } satisfies ImageBlock;
+            } else if (type === "profile") {
+                newBlock = {
+                    id,
+                    type: "image",
+                    x: 0.35,
+                    y: 0.35,
+                    w: 0.3,
+                    h: 0.3,
+                    zIndex: maxZ + 1,
+                    assetPath: book2ProfileImageUrl ?? "",
+                    objectFit: "cover",
+                    shape: "circle",
+                } satisfies ImageBlock;
+            } else {
+                newBlock = {
+                    id,
+                    type: "svg",
+                    x: 0.05,
+                    y: 0.05,
+                    w: 0.2,
+                    h: 0.2,
+                    zIndex: maxZ + 1,
+                    objectFit: "contain",
+                    svgCode:
+                        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#000000"><path d="M12 2L2 22h20L12 2z"/></svg>',
+                } satisfies SvgBlock;
+            }
 
             onLayoutChange((prev) => ({
                 ...prev,
@@ -99,7 +163,7 @@ export function PageCanvasStage({
             }));
             setSelectedBlockId(id);
         },
-        [layout, onLayoutChange, setSelectedBlockId],
+        [book2ProfileImageUrl, layout, onLayoutChange, setSelectedBlockId],
     );
 
     // ── Delete block ───────────────────────────
@@ -135,8 +199,10 @@ export function PageCanvasStage({
     const handlePointerMove = useCallback(
         (e: React.PointerEvent) => {
             if (dragging) {
-                const dx = (e.clientX - dragging.startX) / CANVAS_DISPLAY_WIDTH;
-                const dy = (e.clientY - dragging.startY) / CANVAS_DISPLAY_HEIGHT;
+                const dx =
+                    safeArea.w > 0 ? (e.clientX - dragging.startX) / safeArea.w : 0;
+                const dy =
+                    safeArea.h > 0 ? (e.clientY - dragging.startY) / safeArea.h : 0;
 
                 onLayoutChange((prev) => ({
                     ...prev,
@@ -153,8 +219,10 @@ export function PageCanvasStage({
             }
 
             if (resizing) {
-                const dx = (e.clientX - resizing.startX) / CANVAS_DISPLAY_WIDTH;
-                const dy = (e.clientY - resizing.startY) / CANVAS_DISPLAY_HEIGHT;
+                const dx =
+                    safeArea.w > 0 ? (e.clientX - resizing.startX) / safeArea.w : 0;
+                const dy =
+                    safeArea.h > 0 ? (e.clientY - resizing.startY) / safeArea.h : 0;
 
                 onLayoutChange((prev) => ({
                     ...prev,
@@ -170,7 +238,7 @@ export function PageCanvasStage({
                 }));
             }
         },
-        [dragging, resizing, onLayoutChange],
+        [dragging, resizing, onLayoutChange, safeArea.h, safeArea.w],
     );
 
     const handlePointerUp = useCallback(() => {
@@ -197,7 +265,7 @@ export function PageCanvasStage({
 
     // ── Render ─────────────────────────────────
     const sortedBlocks = [...layout.blocks].sort((a, b) => a.zIndex - b.zIndex);
-    const bgColor = layout.backgroundColor || "#ffffff";
+    const bgColor = normalizePaperBackground(layout.backgroundColor);
 
     return (
         <div className="flex flex-col items-center gap-4">
@@ -214,6 +282,18 @@ export function PageCanvasStage({
                     className="rounded-lg border border-neutral-700 bg-neutral-800 px-3 py-1.5 text-xs font-medium transition-colors hover:bg-neutral-700"
                 >
                     + Gambar
+                </button>
+                <button
+                    onClick={() => addBlock("svg")}
+                    className="rounded-lg border border-neutral-700 bg-neutral-800 px-3 py-1.5 text-xs font-medium transition-colors hover:bg-neutral-700"
+                >
+                    + SVG
+                </button>
+                <button
+                    onClick={() => addBlock("profile")}
+                    className="rounded-lg border border-neutral-700 bg-neutral-800 px-3 py-1.5 text-xs font-medium transition-colors hover:bg-neutral-700"
+                >
+                    + Profile Page
                 </button>
                 {selectedBlockId && (
                     <button
@@ -243,20 +323,21 @@ export function PageCanvasStage({
                 <div
                     className="absolute border border-dashed border-neutral-300/30 pointer-events-none"
                     style={{
-                        left: `${8}%`,
-                        top: `${10}%`,
-                        width: `${84}%`,
-                        height: `${80}%`,
+                        left: safeArea.x,
+                        top: safeArea.y,
+                        width: safeArea.w,
+                        height: safeArea.h,
                     }}
                 />
 
                 {/* Blocks */}
                 {sortedBlocks.map((block) => {
                     const isSelected = selectedBlockId === block.id;
-                    const left = block.x * 100;
-                    const top = block.y * 100;
-                    const width = block.w * 100;
-                    const height = block.h * 100;
+                    const left = safeArea.x + block.x * safeArea.w;
+                    const top = safeArea.y + block.y * safeArea.h;
+                    const width = block.w * safeArea.w;
+                    const height = block.h * safeArea.h;
+                    const circlePreviewSize = Math.min(width, height);
 
                     return (
                         <div
@@ -266,10 +347,10 @@ export function PageCanvasStage({
                                 : "hover:ring-1 hover:ring-neutral-400"
                                 }`}
                             style={{
-                                left: `${left}%`,
-                                top: `${top}%`,
-                                width: `${width}%`,
-                                height: `${height}%`,
+                                left,
+                                top,
+                                width,
+                                height,
                                 zIndex: block.zIndex,
                             }}
                             onPointerDown={(e) => handlePointerDown(e, block)}
@@ -278,9 +359,12 @@ export function PageCanvasStage({
                             {/* Block content preview */}
                             {block.type === "text" ? (
                                 <div
-                                    className="w-full h-full overflow-hidden p-1"
+                                    className="w-full h-full overflow-hidden"
                                     style={{
-                                        fontSize: `${Math.max(8, block.style.fontSize * 0.4)}px`,
+                                        fontSize: `${Math.max(
+                                            8,
+                                            block.style.fontSize * textPreviewScale,
+                                        )}px`,
                                         fontWeight: block.style.fontWeight,
                                         textAlign: block.style.textAlign,
                                         color: block.style.color,
@@ -290,22 +374,64 @@ export function PageCanvasStage({
                                 >
                                     {block.content || "…"}
                                 </div>
-                            ) : (
-                                <div className="w-full h-full bg-neutral-200 flex items-center justify-center">
+                            ) : block.type === "image" ? (
+                                <div
+                                    className="w-full h-full bg-neutral-200 flex items-center justify-center overflow-hidden"
+                                >
                                     {block.assetPath ? (
-                                        // eslint-disable-next-line @next/next/no-img-element
-                                        <img
-                                            src={block.assetPath}
-                                            alt="Block image"
-                                            className="w-full h-full"
-                                            style={{ objectFit: block.objectFit }}
-                                            draggable={false}
-                                        />
+                                        block.shape === "circle" ? (
+                                            <div
+                                                className="overflow-hidden rounded-full"
+                                                style={{ width: circlePreviewSize, height: circlePreviewSize }}
+                                            >
+                                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                                <img
+                                                    src={block.assetPath}
+                                                    alt="Block image"
+                                                    className="w-full h-full"
+                                                    style={{ objectFit: block.objectFit }}
+                                                    draggable={false}
+                                                />
+                                            </div>
+                                        ) : (
+                                            // eslint-disable-next-line @next/next/no-img-element
+                                            <img
+                                                src={block.assetPath}
+                                                alt="Block image"
+                                                className="w-full h-full"
+                                                style={{ objectFit: block.objectFit }}
+                                                draggable={false}
+                                            />
+                                        )
                                     ) : (
                                         <span className="text-xs text-neutral-400">
                                             Belum ada gambar
                                         </span>
                                     )}
+                                </div>
+                            ) : (
+                                <div className="w-full h-full flex items-center justify-center">
+                                    {(() => {
+                                        const sanitized = sanitizeSvgCode(block.svgCode);
+                                        const svgUrl = sanitized ? svgToDataUrl(sanitized) : null;
+                                        if (!svgUrl) {
+                                            return (
+                                                <span className="text-xs text-neutral-400">
+                                                    SVG tidak valid
+                                                </span>
+                                            );
+                                        }
+                                        return (
+                                            // eslint-disable-next-line @next/next/no-img-element
+                                            <img
+                                                src={svgUrl}
+                                                alt="SVG block preview"
+                                                className="w-full h-full"
+                                                style={{ objectFit: block.objectFit }}
+                                                draggable={false}
+                                            />
+                                        );
+                                    })()}
                                 </div>
                             )}
 

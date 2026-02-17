@@ -443,6 +443,8 @@ interface PageProps extends GroupProps {
   pageSegments?: number;
   /** Minimum page number allowed to flip to manually. Default 0. */
   minPage?: number;
+  /** Maximum page number allowed to flip to manually. Default Infinity. */
+  maxPage?: number;
 }
 
 const Page = ({
@@ -473,6 +475,7 @@ const Page = ({
   interactionDisabled = false,
   pageSegments = PAGE_SEGMENTS,
   minPage = 0,
+  maxPage = Number.POSITIVE_INFINITY,
 
   ...props
 }: PageProps) => {
@@ -953,7 +956,7 @@ const Page = ({
           return;
         }
         const targetPage = opened ? number : number + 1;
-        if (targetPage < minPage) {
+        if (targetPage < minPage || targetPage > maxPage) {
           setHighlighted(false);
           return;
         }
@@ -1019,6 +1022,8 @@ export interface Book3DProps extends GroupProps {
   pageSegments?: number;
   /** Minimum page number allowed to flip to manually. Default 0. */
   minPage?: number;
+  /** Maximum page number allowed to flip to manually. Default Infinity. */
+  maxPage?: number;
   /** Animate backward page navigation as chained flips instead of snapping. */
   chainBackwardTurns?: boolean;
 
@@ -1046,6 +1051,7 @@ export const Book3D = ({
   spineBaseOffset = [COVER_CONNECTOR_X_OFFSET, COVER_CONNECTOR_Y_OFFSET, COVER_CONNECTOR_Z_OFFSET],
   pageSegments,
   minPage = 0,
+  maxPage = Number.POSITIVE_INFINITY,
   chainBackwardTurns = false,
 
   ...props
@@ -1281,6 +1287,7 @@ export const Book3D = ({
               interactionDisabled={interactionDisabled}
               pageSegments={pageSegments}
               minPage={minPage}
+              maxPage={maxPage}
 
             />
           );

@@ -7,6 +7,7 @@ import type {
     TextBlock,
 } from "@/types/book-content";
 import { ImageUploadField } from "./ImageUploadField";
+import { normalizePaperBackground } from "@/lib/book-content/paper-tone";
 
 interface BlockInspectorProps {
     layout: PageSideLayout;
@@ -58,7 +59,7 @@ export function BlockInspector({
                     <div className="flex items-center gap-2">
                         <input
                             type="color"
-                            value={layout.backgroundColor || "#ffffff"}
+                            value={normalizePaperBackground(layout.backgroundColor)}
                             onChange={(e) =>
                                 onLayoutChange((prev) => ({
                                     ...prev,
@@ -68,7 +69,7 @@ export function BlockInspector({
                             className="h-8 w-8 cursor-pointer rounded border border-neutral-700 bg-transparent"
                         />
                         <span className="text-xs text-neutral-500">
-                            {layout.backgroundColor || "#ffffff"}
+                            {normalizePaperBackground(layout.backgroundColor)}
                         </span>
                     </div>
                 </div>
@@ -79,7 +80,11 @@ export function BlockInspector({
     return (
         <div className="p-4 space-y-4">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-neutral-400">
-                {selectedBlock.type === "text" ? "Blok Teks" : "Blok Gambar"}
+                {selectedBlock.type === "text"
+                    ? "Blok Teks"
+                    : selectedBlock.type === "image"
+                        ? "Blok Gambar"
+                        : "Blok SVG"}
             </h3>
 
             {/* Position / Size */}
@@ -297,6 +302,47 @@ export function BlockInspector({
                         >
                             <option value="cover">Cover</option>
                             <option value="contain">Contain</option>
+                        </select>
+                    </div>
+                </>
+            )}
+
+            {/* SVG-specific controls */}
+            {selectedBlock.type === "svg" && (
+                <>
+                    <div className="space-y-1">
+                        <label className="text-xs text-neutral-500">
+                            Kode SVG
+                        </label>
+                        <textarea
+                            value={selectedBlock.svgCode}
+                            onChange={(e) =>
+                                updateBlock(selectedBlock.id, { svgCode: e.target.value })
+                            }
+                            rows={8}
+                            className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1.5 text-xs font-mono outline-none focus:border-amber-500 resize-y"
+                            placeholder='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">...</svg>'
+                        />
+                        <p className="text-[10px] text-neutral-500">
+                            Tempel SVG mentah dari icon tech stack.
+                        </p>
+                    </div>
+
+                    <div className="space-y-0.5">
+                        <label className="text-[10px] uppercase text-neutral-600">
+                            Object Fit
+                        </label>
+                        <select
+                            value={selectedBlock.objectFit}
+                            onChange={(e) =>
+                                updateBlock(selectedBlock.id, {
+                                    objectFit: e.target.value as "cover" | "contain",
+                                })
+                            }
+                            className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs outline-none focus:border-amber-500"
+                        >
+                            <option value="contain">Contain</option>
+                            <option value="cover">Cover</option>
                         </select>
                     </div>
                 </>

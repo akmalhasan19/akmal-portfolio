@@ -2,7 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { CanvasTexture, SRGBColorSpace } from "three";
-import { renderPageSideToCanvas } from "./render-canvas";
+import {
+    CANVAS_RENDERER_VERSION,
+    renderPageSideToCanvas,
+} from "./render-canvas";
 import { pageSideKey } from "@/types/book-content";
 import type { BookKey, PageSideLayout, BookPageSideLayoutRow } from "@/types/book-content";
 
@@ -28,7 +31,7 @@ interface UseBookSideTexturesOptions {
 }
 
 function layoutHash(layout: PageSideLayout): string {
-    return JSON.stringify(layout);
+    return `${CANVAS_RENDERER_VERSION}:${JSON.stringify(layout)}`;
 }
 
 function getRetainedPageIndices(

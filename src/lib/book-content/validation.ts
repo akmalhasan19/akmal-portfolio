@@ -1,4 +1,6 @@
 import type { LayoutBlock, PageSideLayout, TextStyleConfig } from "@/types/book-content";
+import { sanitizeSvgCode } from "./svg-utils";
+import { normalizePaperBackground } from "./paper-tone";
 
 // ── Constants ────────────────────────────────
 
@@ -88,6 +90,22 @@ export function validateLayout(layout: PageSideLayout): ValidationResult {
             };
         }
 
+        if (clamped.type === "svg") {
+            return {
+                ...clamped,
+                svgCode: sanitizeSvgCode(clamped.svgCode),
+                objectFit: clamped.objectFit === "contain" ? "contain" : "cover",
+            };
+        }
+
+        if (clamped.type === "image") {
+            return {
+                ...clamped,
+                objectFit: clamped.objectFit === "contain" ? "contain" : "cover",
+                shape: clamped.shape === "circle" ? "circle" : "rect",
+            };
+        }
+
         return clamped;
     });
 
@@ -105,7 +123,7 @@ export function validateLayout(layout: PageSideLayout): ValidationResult {
         layout: {
             blocks: validatedBlocks,
             paddingOverride,
-            backgroundColor: layout.backgroundColor || "#ffffff",
+            backgroundColor: normalizePaperBackground(layout.backgroundColor),
         },
     };
 }

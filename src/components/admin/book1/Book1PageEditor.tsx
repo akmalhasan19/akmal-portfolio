@@ -15,6 +15,7 @@ import {
 } from "@/lib/book-content/editor-atoms";
 import type { PageSide, PageSideLayout } from "@/types/book-content";
 import { validateLayout } from "@/lib/book-content/validation";
+import { BOOK_PAPER_TONE, normalizePaperBackground } from "@/lib/book-content/paper-tone";
 import { PageNavigator } from "./PageNavigator";
 import { PageCanvasStage } from "./PageCanvasStage";
 import { BlockInspector } from "./BlockInspector";
@@ -151,9 +152,15 @@ export function Book1PageEditor() {
                 setSaveError("Gagal memuat layout.");
             }
 
-            const fetchedLayout: PageSideLayout = data?.layout ?? {
+            const fetchedLayoutRaw: PageSideLayout = data?.layout ?? {
                 blocks: [],
-                backgroundColor: "#ffffff",
+                backgroundColor: BOOK_PAPER_TONE,
+            };
+            const fetchedLayout: PageSideLayout = {
+                ...fetchedLayoutRaw,
+                backgroundColor: normalizePaperBackground(
+                    fetchedLayoutRaw.backgroundColor,
+                ),
             };
 
             setLayout(fetchedLayout);

@@ -67,10 +67,20 @@ export interface ImageBlock extends BlockBase {
     assetPath: string;
     /** Object-fit mode for rendering. */
     objectFit: "cover" | "contain";
+    /** Visual clipping shape for image rendering. */
+    shape?: "rect" | "circle";
+}
+
+export interface SvgBlock extends BlockBase {
+    type: "svg";
+    /** Raw inline SVG markup (icon code pasted from source). */
+    svgCode: string;
+    /** Object-fit mode for rendering. */
+    objectFit: "cover" | "contain";
 }
 
 /** Discriminated union of all block types. */
-export type LayoutBlock = TextBlock | ImageBlock;
+export type LayoutBlock = TextBlock | ImageBlock | SvgBlock;
 
 // ── Page side layout ─────────────────────────
 

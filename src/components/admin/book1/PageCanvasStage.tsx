@@ -7,9 +7,12 @@ import type {
     PageSideLayout,
     TextBlock,
     ImageBlock,
+    SvgBlock,
 } from "@/types/book-content";
 import { canAddBlock } from "@/lib/book-content/validation";
 import { selectedBlockIdAtom } from "@/lib/book-content/editor-atoms";
+import { sanitizeSvgCode, svgToDataUrl } from "@/lib/book-content/svg-utils";
+import { normalizePaperBackground } from "@/lib/book-content/paper-tone";
 
 // ── Constants ────────────────────────────────
 
@@ -197,7 +200,7 @@ export function PageCanvasStage({
 
     // ── Render ─────────────────────────────────
     const sortedBlocks = [...layout.blocks].sort((a, b) => a.zIndex - b.zIndex);
-    const bgColor = layout.backgroundColor || "#ffffff";
+    const bgColor = normalizePaperBackground(layout.backgroundColor);
 
     return (
         <div className="flex flex-col items-center gap-4">
@@ -290,7 +293,7 @@ export function PageCanvasStage({
                                 >
                                     {block.content || "…"}
                                 </div>
-                            ) : (
+                            ) : block.type === "image" ? (
                                 <div className="w-full h-full bg-neutral-200 flex items-center justify-center">
                                     {block.assetPath ? (
                                         // eslint-disable-next-line @next/next/no-img-element
@@ -306,6 +309,32 @@ export function PageCanvasStage({
                                             Belum ada gambar
                                         </span>
                                     )}
+                                </div>
+                            ) : (
+                                <div className="w-full h-full flex items-center justify-center">
+                                    {(() => {
+                                        const sanitized = sanitizeSvgCode(
+                                            (block as SvgBlock).svgCode,
+                                        );
+                                        const svgUrl = sanitized ? svgToDataUrl(sanitized) : null;
+                                        if (!svgUrl) {
+                                            return (
+                                                <span className="text-xs text-neutral-400">
+                                                    SVG tidak valid
+                                                </span>
+                                            );
+                                        }
+                                        return (
+                                            // eslint-disable-next-line @next/next/no-img-element
+                                            <img
+                                                src={svgUrl}
+                                                alt="SVG block preview"
+                                                className="w-full h-full"
+                                                style={{ objectFit: (block as SvgBlock).objectFit }}
+                                                draggable={false}
+                                            />
+                                        );
+                                    })()}
                                 </div>
                             )}
 

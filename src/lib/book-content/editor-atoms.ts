@@ -2,6 +2,7 @@
 
 import { atom } from "jotai";
 import type { PageSide, PageSideLayout } from "@/types/book-content";
+import { BOOK_PAPER_TONE } from "@/lib/book-content/paper-tone";
 
 // ── Selected page / side ─────────────────────
 
@@ -12,7 +13,7 @@ export const selectedSideAtom = atom<PageSide>("front");
 
 const defaultLayout: PageSideLayout = {
     blocks: [],
-    backgroundColor: "#ffffff",
+    backgroundColor: BOOK_PAPER_TONE,
 };
 
 export const layoutDraftAtom = atom<PageSideLayout>(defaultLayout);
