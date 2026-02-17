@@ -2,21 +2,17 @@
 
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, useFrame, useThree, ThreeElements } from '@react-three/fiber';
-import { Html, SpotLight, useCursor, useDetectGPU, useGLTF, useProgress, useTexture } from '@react-three/drei';
+import { Html, OrbitControls, SpotLight, Text, useCursor, useDetectGPU, useGLTF, useProgress, useTexture } from '@react-three/drei';
 import type { ThreeEvent } from '@react-three/fiber';
 import { Bloom, EffectComposer, Vignette } from '@react-three/postprocessing';
 import {
   ACESFilmicToneMapping,
-  CanvasTexture,
   Group,
-  LinearFilter,
-  LinearMipmapLinearFilter,
   MathUtils,
   Mesh,
   MeshStandardMaterial,
   Object3D,
   PCFSoftShadowMap,
-  SRGBColorSpace,
   SpotLight as SpotLightImpl,
   Vector3,
 } from 'three';
@@ -106,14 +102,25 @@ const LAMP_STRING_MESSAGE_POSITION: [number, number, number] = [0.26, 0.18, 0.06
 const LAMP_STRING_MESSAGE_TIMEOUT_MS = 4200;
 
 // Desk name plaque transform (edit x/y/z directly).
-const DESK_PLAQUE_POSITION: [number, number, number] = [0.2, -0.15, 0.95];
-const DESK_PLAQUE_ROTATION_DEG: [number, number, number] = [0, 0, 0];
-const DESK_PLAQUE_SCALE = 0.6;
+const DESK_PLAQUE_POSITION: [number, number, number] = [1, -0.15, 1.25];
+const DESK_PLAQUE_ROTATION_DEG: [number, number, number] = [0, -27, 0];
+const DESK_PLAQUE_SCALE = 0.07;
 const DESK_PLAQUE_ROTATION_RAD: [number, number, number] = [
   MathUtils.degToRad(DESK_PLAQUE_ROTATION_DEG[0]),
   MathUtils.degToRad(DESK_PLAQUE_ROTATION_DEG[1]),
   MathUtils.degToRad(DESK_PLAQUE_ROTATION_DEG[2]),
 ];
+// Desk plaque text transform (fine tune to stick text onto name tag).
+const DESK_PLAQUE_TEXT_OFFSET: [number, number, number] = [0, 0, -3.2512];
+const DESK_PLAQUE_TEXT_ROTATION_DEG: [number, number, number] = [-29, 24, 13];
+const DESK_PLAQUE_TEXT_SCALE = 2.5;
+const DESK_PLAQUE_TEXT_ROTATION_RAD: [number, number, number] = [
+  MathUtils.degToRad(DESK_PLAQUE_TEXT_ROTATION_DEG[0]),
+  MathUtils.degToRad(DESK_PLAQUE_TEXT_ROTATION_DEG[1]),
+  MathUtils.degToRad(DESK_PLAQUE_TEXT_ROTATION_DEG[2]),
+];
+const DESK_PLAQUE_TEXT_FONT_PATH = '/fonts/Caveat-700.ttf';
+const DESK_PLAQUE_TEXT_COLOR = '#332421';
 
 // Back button positions
 const BOOK1_BACK_BUTTON_POSITION: [number, number, number] = [0.8, 0.02, 0.33];
@@ -140,6 +147,7 @@ const CORE_MODEL_PATHS = [
   '/models/simple_old_mug/scene.gltf',
   '/models/mini_plant/scene.gltf',
   '/models/ballpoin_golden/scene.gltf',
+  '/models/desk_name_plaque/desk_name_plaque_2_kinds.glb',
 ] as const;
 
 const CORE_TEXTURE_PATHS = [
@@ -706,90 +714,89 @@ function CoffeeMug({ steamEnabled, enableShadows, ...props }: CoffeeMugProps) {
 
 type DeskNamePlaqueProps = ThreeElements['group'] & {
   enableShadows: boolean;
-  nameText?: string;
 };
 
-function DeskNamePlaque({ enableShadows, nameText = 'Akmal Hasan Mulyadi', ...props }: DeskNamePlaqueProps) {
-  const maxAnisotropy = useThree((state) => state.gl.capabilities.getMaxAnisotropy());
-
-  const nameplateTexture = useMemo(() => {
-    const canvas = document.createElement('canvas');
-    // Match the plaque face aspect ratio and increase resolution for sharper text.
-    canvas.width = 3072;
-    canvas.height = 320;
-
-    const context = canvas.getContext('2d');
-    if (!context) {
-      return null;
+function DeskNamePlaque({ enableShadows, ...props }: DeskNamePlaqueProps) {
+  const { nodes, materials } = useGLTF('/models/desk_name_plaque/desk_name_plaque_2_kinds.glb') as unknown as {
+    nodes: Record<string, Mesh>;
+    materials: Record<string, MeshStandardMaterial>;
+  };
+  const nameBadgeGeometry = nodes.NameBadge_1_NameTag1_0.geometry;
+  const nameTagMaterial = useMemo(() => {
+    const material = materials.NameTag1.clone();
+    material.map = null;
+    material.color.set('#d8bf83');
+    material.roughness = 0.42;
+    material.metalness = 0.1;
+    material.needsUpdate = true;
+    return material;
+  }, [materials.NameTag1]);
+  const nameBadgeLayout = useMemo(() => {
+    if (!nameBadgeGeometry.boundingBox) {
+      nameBadgeGeometry.computeBoundingBox();
+    }
+    const box = nameBadgeGeometry.boundingBox;
+    if (!box) {
+      return {
+        centerX: 0,
+        centerY: 0,
+        frontZ: 0.001,
+        width: 1,
+        height: 0.2,
+      };
     }
 
-    context.imageSmoothingEnabled = true;
-    context.imageSmoothingQuality = 'high';
-    context.fillStyle = '#d3b06f';
-    context.fillRect(0, 0, canvas.width, canvas.height);
-
-    context.strokeStyle = '#7d5e2f';
-    context.lineWidth = 20;
-    context.strokeRect(16, 16, canvas.width - 32, canvas.height - 32);
-
-    const plaqueText = nameText.toUpperCase();
-    let fontSize = 126;
-    const maxTextWidth = canvas.width - 180;
-    context.fillStyle = '#2a1c0d';
-    context.textAlign = 'center';
-    context.textBaseline = 'middle';
-    while (fontSize > 56) {
-      context.font = `700 ${fontSize}px 'Georgia', 'Times New Roman', serif`;
-      if (context.measureText(plaqueText).width <= maxTextWidth) {
-        break;
-      }
-      fontSize -= 2;
-    }
-    context.fillText(plaqueText, canvas.width / 2, canvas.height / 2 + 8);
-
-    const texture = new CanvasTexture(canvas);
-    texture.colorSpace = SRGBColorSpace;
-    texture.anisotropy = Math.max(1, maxAnisotropy);
-    texture.minFilter = LinearMipmapLinearFilter;
-    texture.magFilter = LinearFilter;
-    texture.generateMipmaps = true;
-    texture.needsUpdate = true;
-    return texture;
-  }, [maxAnisotropy, nameText]);
+    return {
+      centerX: (box.min.x + box.max.x) * 0.5,
+      centerY: (box.min.y + box.max.y) * 0.5,
+      frontZ: box.max.z,
+      width: Math.max(0.001, box.max.x - box.min.x),
+      height: Math.max(0.001, box.max.y - box.min.y),
+    };
+  }, [nameBadgeGeometry]);
 
   useEffect(() => () => {
-    nameplateTexture?.dispose();
-  }, [nameplateTexture]);
+    nameTagMaterial.dispose();
+  }, [nameTagMaterial]);
 
   return (
-    <group {...props}>
-      <mesh castShadow={enableShadows} receiveShadow={enableShadows} position={[0, 0.035, 0]}>
-        <boxGeometry args={[2.2, 0.08, 0.5]} />
-        <meshStandardMaterial color="#2f2b25" roughness={0.48} metalness={0.52} />
-      </mesh>
-
-      <mesh castShadow={enableShadows} receiveShadow={enableShadows} position={[-0.82, 0.12, 0]}>
-        <cylinderGeometry args={[0.04, 0.04, 0.17, 20]} />
-        <meshStandardMaterial color="#b3894f" roughness={0.34} metalness={0.78} />
-      </mesh>
-      <mesh castShadow={enableShadows} receiveShadow={enableShadows} position={[0.82, 0.12, 0]}>
-        <cylinderGeometry args={[0.04, 0.04, 0.17, 20]} />
-        <meshStandardMaterial color="#b3894f" roughness={0.34} metalness={0.78} />
-      </mesh>
-
-      <mesh castShadow={enableShadows} receiveShadow={enableShadows} position={[0, 0.205, 0]}>
-        <boxGeometry args={[1.86, 0.27, 0.06]} />
-        <meshStandardMaterial color="#9d753f" roughness={0.33} metalness={0.7} />
-      </mesh>
-
-      <mesh receiveShadow={enableShadows} position={[0, 0.205, 0.034]}>
-        <planeGeometry args={[1.74, 0.18]} />
-        <meshStandardMaterial
-          map={nameplateTexture ?? undefined}
-          color="#ead4a1"
-          roughness={0.4}
-          metalness={0.12}
-        />
+    <group {...props} dispose={null}>
+      <mesh
+        castShadow={enableShadows}
+        receiveShadow={enableShadows}
+        geometry={nodes.NameHolder_1_DeskWood2_0.geometry}
+        material={materials.DeskWood2}
+      />
+      <mesh
+        castShadow={enableShadows}
+        receiveShadow={enableShadows}
+        geometry={nodes.NameHolder_1_Bronze2_0.geometry}
+        material={materials.Bronze2}
+      />
+      <mesh
+        castShadow={enableShadows}
+        receiveShadow={enableShadows}
+        geometry={nameBadgeGeometry}
+        material={nameTagMaterial}
+      >
+        <Text
+          position={[
+            nameBadgeLayout.centerX + DESK_PLAQUE_TEXT_OFFSET[0],
+            nameBadgeLayout.centerY + DESK_PLAQUE_TEXT_OFFSET[1],
+            nameBadgeLayout.frontZ + DESK_PLAQUE_TEXT_OFFSET[2],
+          ]}
+          rotation={DESK_PLAQUE_TEXT_ROTATION_RAD}
+          scale={DESK_PLAQUE_TEXT_SCALE}
+          font={DESK_PLAQUE_TEXT_FONT_PATH}
+          fontSize={nameBadgeLayout.height * 0.2}
+          maxWidth={nameBadgeLayout.width * 0.88}
+          anchorX="center"
+          anchorY="middle"
+          color={DESK_PLAQUE_TEXT_COLOR}
+          depthOffset={-1}
+        >
+          Akmal Hasan Mulyadi
+        </Text>
       </mesh>
     </group>
   );
@@ -1240,6 +1247,7 @@ export default function Hero() {
   // Camera focus state
   const [cameraPhase, setCameraPhase] = useState<CameraPhase>('overview');
   const bookFocused = cameraPhase === 'focused' || cameraPhase === 'focusing';
+  const [isDevFreeRoam, setIsDevFreeRoam] = useState(false);
 
 
   const [spotlightBook, setSpotlightBook] = useState<BookId>('book1');
@@ -1258,6 +1266,11 @@ export default function Hero() {
 
   // Use the dynamic atom for the setter
   const setSpotlightPage = useSetAtom(activeBookAtom);
+  const setBook1Page = useSetAtom(bookAtom);
+  const setBook2Page = useSetAtom(book2Atom);
+  const setBook3Page = useSetAtom(book3Atom);
+  const setBook4Page = useSetAtom(book4Atom);
+  const setBook5Page = useSetAtom(book5Atom);
 
   // Auto-open front cover when camera focuses on the book
   const [showBackButton, setShowBackButton] = useState(false);
@@ -1286,10 +1299,13 @@ export default function Hero() {
   }, [cameraPhase, setSpotlightPage]);
 
   const handleBookFocus = useCallback(() => {
+    if (isDevFreeRoam) {
+      return;
+    }
     if (cameraPhase === 'overview') {
       setCameraPhase('focusing');
     }
-  }, [cameraPhase]);
+  }, [cameraPhase, isDevFreeRoam]);
 
   const handleBackToOverview = useCallback(() => {
     if (cameraPhase === 'focused') {
@@ -1304,6 +1320,23 @@ export default function Hero() {
       return prev;
     });
   }, []);
+
+  const handleEnableDevFreeRoam = useCallback(() => {
+    setShowBackButton(false);
+    setIsDevFreeRoam(true);
+  }, []);
+
+  const handleResetToDefaultCamera = useCallback(() => {
+    setIsDevFreeRoam(false);
+    setShowBackButton(false);
+    setCameraPhase('overview');
+    setSpotlightBook('book1');
+    setBook1Page(0);
+    setBook2Page(0);
+    setBook3Page(0);
+    setBook4Page(0);
+    setBook5Page(0);
+  }, [setBook1Page, setBook2Page, setBook3Page, setBook4Page, setBook5Page]);
 
   const book2Pages = useMemo(
     () => createBlankBookInteriorPages(sceneProfile.secondBookSheetCount),
@@ -1463,7 +1496,6 @@ export default function Hero() {
               position={DESK_PLAQUE_POSITION}
               rotation={DESK_PLAQUE_ROTATION_RAD}
               scale={DESK_PLAQUE_SCALE}
-              nameText="Akmal Hasan Mulyadi"
             />
             {sceneProfile.renderPlant && (
               <Model
@@ -1491,10 +1523,26 @@ export default function Hero() {
           </EffectComposer>
         )}
 
-        <CameraSetup phase={cameraPhase} onTransitionDone={handleTransitionDone} />
+        {!isDevFreeRoam && (
+          <CameraSetup phase={cameraPhase} onTransitionDone={handleTransitionDone} />
+        )}
+        {isDevFreeRoam && (
+          <OrbitControls
+            makeDefault
+            enableDamping
+            dampingFactor={0.08}
+            target={[
+              DESK_PLAQUE_POSITION[0],
+              DESK_PLAQUE_POSITION[1] + 0.08,
+              DESK_PLAQUE_POSITION[2],
+            ]}
+            minDistance={0.6}
+            maxDistance={8}
+          />
+        )}
 
         {/* 3D Home button — on the left page (back of front cover), vintage style */}
-        {(cameraPhase === 'focused') && (
+        {(cameraPhase === 'focused' && !isDevFreeRoam) && (
           <group position={spotlightBook === 'book2' ? BOOK2_BACK_BUTTON_POSITION : BOOK1_BACK_BUTTON_POSITION}>
             <Html
               center
@@ -1540,6 +1588,27 @@ export default function Hero() {
           </group>
         )}
       </Canvas>
+
+      {!showLoaderOverlay && (
+        <div className="absolute top-4 right-4 z-30 flex items-center gap-2">
+          {!isDevFreeRoam && (
+            <button
+              type="button"
+              onClick={handleEnableDevFreeRoam}
+              className="rounded-md border border-[#f5e4c0]/40 bg-black/60 px-3 py-1.5 text-[11px] uppercase tracking-[0.12em] text-[#f5e4c0] hover:bg-black/75 transition-colors"
+            >
+              Free Roam (Dev)
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={handleResetToDefaultCamera}
+            className="rounded-md border border-[#f5e4c0]/40 bg-black/60 px-3 py-1.5 text-[11px] uppercase tracking-[0.12em] text-[#f5e4c0] hover:bg-black/75 transition-colors"
+          >
+            Reset Kamera
+          </button>
+        </div>
+      )}
 
       {showLoaderOverlay && (
         <div
