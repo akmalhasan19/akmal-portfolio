@@ -2,7 +2,7 @@
 
 import { Caveat } from 'next/font/google';
 import dynamic from 'next/dynamic';
-import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, useFrame, useThree, ThreeElements } from '@react-three/fiber';
 import type { ThreeEvent } from '@react-three/fiber';
 import type { TierResult } from 'detect-gpu';
@@ -25,7 +25,7 @@ import {
   Vector3,
 } from 'three';
 import { Book3D, createBookAtom } from './Book3D';
-import { useAtom, useSetAtom, useAtomValue } from 'jotai';
+import { useSetAtom, useAtomValue } from 'jotai';
 import { CoffeeSteam } from './CoffeeSteam';
 
 import { useBookSideTextures } from '@/lib/book-content/useBookSideTextures';
@@ -471,14 +471,18 @@ function CameraSetup({ phase, onTransitionDone }: CameraSetupProps) {
   const staticSetRef = useRef(false);
 
   // Sync prop → ref synchronously (runs every render, before useFrame)
-  if (phaseRef.current !== phase) {
+  // Sync phase refs outside render to keep component pure.
+  useLayoutEffect(() => {
+    if (phaseRef.current === phase) {
+      return;
+    }
     phaseRef.current = phase;
     staticSetRef.current = false;
     if (phase === 'focusing' || phase === 'unfocusing') {
       animStartRef.current = null; // will be set on first frame
       doneRef.current = false;
     }
-  }
+  }, [phase]);
 
   // Set initial camera on mount
   useEffect(() => {
@@ -1524,6 +1528,7 @@ export default function Hero() {
     }
   }, [spotlightBook]);
   const currentBook1Page = useAtomValue(bookAtom);
+  const currentBook2Page = useAtomValue(book2Atom);
   const currentSpotlightPage = useAtomValue(activeBookAtom);
 
   // Use the dynamic atom for the setter
@@ -1535,7 +1540,7 @@ export default function Hero() {
     if (cameraPhase === 'focused') {
       if (spotlightBook === 'book2') {
         // Open to the middle page for Book 2
-        setSpotlightPage(Math.floor(book2Pages.length / 2));
+        setSpotlightPage(Math.floor(sceneProfile.secondBookSheetCount / 2));
       } else {
         setSpotlightPage(1); // Open front cover for others
       }
@@ -1553,7 +1558,7 @@ export default function Hero() {
     } else {
       setShowBackButton(false);
     }
-  }, [cameraPhase, setSpotlightPage]);
+  }, [cameraPhase, setSpotlightPage, spotlightBook, sceneProfile.secondBookSheetCount]);
 
   const handleBookFocus = useCallback(() => {
     if (cameraPhase === 'overview') {
@@ -1616,7 +1621,8 @@ export default function Hero() {
     totalPageEntries: book2Pages.length + 2, // interior sheets + 2 covers
     canvasHeight: isLowEndDevice ? 1024 : 1536,
     textureLoadRadius: sceneProfile.bookTextureLoadRadius,
-    enabled: false, // sceneProfile.renderSecondBook,
+    currentPage: currentBook2Page,
+    enabled: sceneProfile.renderSecondBook,
   });
   const book2ProfileImageUrl = useBookProfileImage({
     bookKey: "book-2",
@@ -1880,4 +1886,5 @@ export default function Hero() {
     </div>
   );
 }
+
 

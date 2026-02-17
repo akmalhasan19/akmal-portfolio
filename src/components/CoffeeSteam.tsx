@@ -169,6 +169,10 @@ void main() {
 `;
 
 const PARTICLE_COUNT = 25; // Fewer particles, but more detailed individually
+const pseudoRandom01 = (seed: number): number => {
+  const x = Math.sin(seed * 12.9898 + 78.233) * 43758.5453123;
+  return x - Math.floor(x);
+};
 
 export const CoffeeSteam = (props: ThreeElements["group"]) => {
   const meshRef = useRef<THREE.InstancedMesh>(null);
@@ -189,12 +193,18 @@ export const CoffeeSteam = (props: ThreeElements["group"]) => {
     const velocities = new Float32Array(PARTICLE_COUNT * 3);
 
     for (let i = 0; i < PARTICLE_COUNT; i++) {
-      offsets[i] = Math.random() * 4.0;
-      scales[i] = 0.6 + Math.random() * 0.4; // Smaller base scale
-      rotations[i] = Math.random();
+      const r1 = pseudoRandom01(i * 4 + 1);
+      const r2 = pseudoRandom01(i * 4 + 2);
+      const r3 = pseudoRandom01(i * 4 + 3);
+      const r4 = pseudoRandom01(i * 4 + 4);
+      const r5 = pseudoRandom01(i * 4 + 5);
 
-      const angle = Math.random() * Math.PI * 2;
-      const speed = 0.1 + Math.random() * 0.2;
+      offsets[i] = r1 * 4.0;
+      scales[i] = 0.6 + r2 * 0.4; // Smaller base scale
+      rotations[i] = r3;
+
+      const angle = r4 * Math.PI * 2;
+      const speed = 0.1 + r5 * 0.2;
       velocities[i * 3] = Math.cos(angle) * speed;
       velocities[i * 3 + 1] = 0.0;
       velocities[i * 3 + 2] = Math.sin(angle) * speed;

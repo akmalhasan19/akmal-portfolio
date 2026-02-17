@@ -4,27 +4,56 @@ import { computeSafeArea } from "./padding";
 // ── Constants ────────────────────────────────
 
 const DEFAULT_BG_COLOR = "#ffffff";
+const MAX_IMAGE_CACHE_ENTRIES = 96;
 
 // ── Image cache ──────────────────────────────
 
 const imageCache = new Map<string, HTMLImageElement>();
+const imageLoadPromiseCache = new Map<string, Promise<HTMLImageElement>>();
+
+function touchImageCache(url: string, img: HTMLImageElement) {
+    if (imageCache.has(url)) {
+        imageCache.delete(url);
+    }
+    imageCache.set(url, img);
+
+    if (imageCache.size > MAX_IMAGE_CACHE_ENTRIES) {
+        const oldestKey = imageCache.keys().next().value;
+        if (oldestKey) {
+            imageCache.delete(oldestKey);
+        }
+    }
+}
 
 function loadImage(url: string): Promise<HTMLImageElement> {
     const cached = imageCache.get(url);
     if (cached?.complete) {
+        touchImageCache(url, cached);
         return Promise.resolve(cached);
     }
 
-    return new Promise((resolve, reject) => {
+    const pending = imageLoadPromiseCache.get(url);
+    if (pending) {
+        return pending;
+    }
+
+    const promise = new Promise<HTMLImageElement>((resolve, reject) => {
         const img = new Image();
         img.crossOrigin = "anonymous";
         img.onload = () => {
-            imageCache.set(url, img);
+            imageLoadPromiseCache.delete(url);
+            touchImageCache(url, img);
             resolve(img);
         };
-        img.onerror = () => reject(new Error(`Failed to load image: ${url}`));
+        img.onerror = () => {
+            imageLoadPromiseCache.delete(url);
+            reject(new Error(`Failed to load image: ${url}`));
+        };
         img.src = url;
     });
+
+    imageLoadPromiseCache.set(url, promise);
+    return promise;
 }
 
 // ── Text wrapping ────────────────────────────

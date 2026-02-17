@@ -687,6 +687,7 @@ const Page = ({
     dynamicBackTexture,
     width,
     height,
+    pageSegments,
     customCoverColor,
     customCoverDarkColor,
     enableShadows,
