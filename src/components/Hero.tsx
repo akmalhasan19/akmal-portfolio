@@ -2,7 +2,7 @@
 
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, useFrame, useThree, ThreeElements } from '@react-three/fiber';
-import { Html, OrbitControls, SpotLight, Text, useCursor, useDetectGPU, useGLTF, useProgress, useTexture } from '@react-three/drei';
+import { Html, SpotLight, Text, useCursor, useDetectGPU, useGLTF, useProgress, useTexture } from '@react-three/drei';
 import type { ThreeEvent } from '@react-three/fiber';
 import { Bloom, EffectComposer, Vignette } from '@react-three/postprocessing';
 import {
@@ -30,6 +30,48 @@ interface ModelProps {
   rotation?: [number, number, number];
   enableShadows?: boolean;
 }
+
+type LanguageCode = 'id' | 'en';
+
+interface HeroTranslations {
+  lampStringMessage: string;
+  portfolioLabel: string;
+  aboutLabel: string;
+  backButton: string;
+  languageLabel: string;
+  languageToggleHint: string;
+  loaderOptimizingDevice: string;
+  loaderOpeningScene: string;
+  loaderLoadingScene: string;
+  loaderPreparingScene: string;
+}
+
+const HERO_TRANSLATIONS: Record<LanguageCode, HeroTranslations> = {
+  id: {
+    lampStringMessage: 'Belum. Beberapa dari kita masih belajar melihat dalam terang',
+    portfolioLabel: 'Portofolio',
+    aboutLabel: 'Tentang',
+    backButton: 'Kembali',
+    languageLabel: 'Bahasa',
+    languageToggleHint: 'Klik untuk ganti ke',
+    loaderOptimizingDevice: 'Optimasi Perangkat',
+    loaderOpeningScene: 'Membuka Scene',
+    loaderLoadingScene: 'Memuat Scene',
+    loaderPreparingScene: 'Menyiapkan Scene',
+  },
+  en: {
+    lampStringMessage: 'Not yet. Some of us are still learning to see in the light',
+    portfolioLabel: 'Portfolio',
+    aboutLabel: 'About',
+    backButton: 'Back',
+    languageLabel: 'Language',
+    languageToggleHint: 'Click to switch to',
+    loaderOptimizingDevice: 'Optimizing Device',
+    loaderOpeningScene: 'Opening Scene',
+    loaderLoadingScene: 'Loading Scene',
+    loaderPreparingScene: 'Preparing Scene',
+  },
+};
 
 // Edit transform buku dari sini.
 const BOOK_POSITION: [number, number, number] = [0.3, -0.06, -0.01];
@@ -98,6 +140,14 @@ const LAMP_TARGET_POSITION: [number, number, number] = [-0.55, -0.5, 0.2];
 const ANTIQUE_GLOBE_POSITION: [number, number, number] = [-2.65, 0.57, 2.05];
 const ANTIQUE_GLOBE_ROTATION: [number, number, number] = [0, 0.8, 0];
 const ANTIQUE_GLOBE_SCALE = 2.4;
+const LANGUAGE_TOGGLE_POSITION: [number, number, number] = [-1.26, 0.07, 0.82];
+const LANGUAGE_TOGGLE_ROTATION_DEG: [number, number, number] = [0, 60, 0];
+const LANGUAGE_TOGGLE_ROTATION_RAD: [number, number, number] = [
+  MathUtils.degToRad(LANGUAGE_TOGGLE_ROTATION_DEG[0]),
+  MathUtils.degToRad(LANGUAGE_TOGGLE_ROTATION_DEG[1]),
+  MathUtils.degToRad(LANGUAGE_TOGGLE_ROTATION_DEG[2]),
+];
+const LANGUAGE_TOGGLE_SCALE = 0.5;
 // Old desk lamp pull-string interaction tuning.
 const LAMP_STRING_HOTSPOT_POSITION: [number, number, number] = [0.11, 0.29, 0.02];
 const LAMP_STRING_HOTSPOT_SIZE: [number, number, number] = [0.08, 0.35, 0.08];
@@ -542,9 +592,17 @@ function tuneLampMaterial(material: MeshStandardMaterial) {
 interface DeskLampModelProps extends Omit<ModelProps, 'path'> {
   lightsOn: boolean;
   enableShadows: boolean;
+  stringMessage: string;
 }
 
-function DeskLampModel({ scale, position, rotation = [0, 0, 0], lightsOn, enableShadows }: DeskLampModelProps) {
+function DeskLampModel({
+  scale,
+  position,
+  rotation = [0, 0, 0],
+  lightsOn,
+  enableShadows,
+  stringMessage,
+}: DeskLampModelProps) {
   const { scene } = useGLTF('/models/old_desk_lamp/scene.gltf');
   const [showStringMessage, setShowStringMessage] = useState(false);
   const [isLampInteractiveHover, setIsLampInteractiveHover] = useState(false);
@@ -685,7 +743,7 @@ function DeskLampModel({ scale, position, rotation = [0, 0, 0], lightsOn, enable
             fontWeight: 700,
           }}
         >
-          Not yet. Some of us are still learning to see in the light
+          {stringMessage}
         </span>
       </Html>
     </group>
@@ -756,6 +814,88 @@ function AntiqueGlobe({ enableShadows, ...props }: AntiqueGlobeProps) {
           />
         </group>
       </group>
+    </group>
+  );
+}
+
+type LanguageToggle3DProps = ThreeElements['group'] & {
+  enableShadows: boolean;
+  language: LanguageCode;
+  languageLabel: string;
+  hintPrefix: string;
+  onToggleLanguage: () => void;
+};
+
+function LanguageToggle3D({
+  enableShadows,
+  language,
+  languageLabel,
+  hintPrefix,
+  onToggleLanguage,
+  ...props
+}: LanguageToggle3DProps) {
+  const [isHovered, setIsHovered] = useState(false);
+  useCursor(isHovered);
+
+  const nextLanguageLabel = language === 'id' ? 'EN' : 'ID';
+  const currentLanguageLabel = language.toUpperCase();
+
+  const handleToggle = useCallback((event: ThreeEvent<MouseEvent>) => {
+    event.stopPropagation();
+    onToggleLanguage();
+  }, [onToggleLanguage]);
+
+  return (
+    <group {...props}>
+      <mesh
+        castShadow={enableShadows}
+        receiveShadow={enableShadows}
+        onPointerOver={(event) => {
+          event.stopPropagation();
+          setIsHovered(true);
+        }}
+        onPointerOut={(event) => {
+          event.stopPropagation();
+          setIsHovered(false);
+        }}
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={handleToggle}
+      >
+        <boxGeometry args={[1.22, 0.5, 0.08]} />
+        <meshStandardMaterial
+          color={isHovered ? '#d4be8a' : '#b89661'}
+          roughness={0.58}
+          metalness={0.22}
+        />
+      </mesh>
+
+      <mesh position={[0, 0, 0.044]} onClick={handleToggle}>
+        <planeGeometry args={[1.03, 0.34]} />
+        <meshStandardMaterial color="#241910" roughness={0.8} metalness={0.08} />
+      </mesh>
+
+      <Text
+        position={[0, 0.07, 0.05]}
+        font={DESK_PLAQUE_TEXT_FONT_PATH}
+        fontSize={0.115}
+        anchorX="center"
+        anchorY="middle"
+        color="#f4deaf"
+        outlineColor="#0e0905"
+        outlineWidth={0.005}
+      >
+        {`${languageLabel}: ${currentLanguageLabel}`}
+      </Text>
+
+      <Text
+        position={[0, -0.11, 0.05]}
+        fontSize={0.07}
+        anchorX="center"
+        anchorY="middle"
+        color={isHovered ? '#ffe7ad' : '#ccb27b'}
+      >
+        {`${hintPrefix} ${nextLanguageLabel}`}
+      </Text>
     </group>
   );
 }
@@ -915,6 +1055,8 @@ interface InteractiveBooksProps {
   book2DynamicContent: ReturnType<typeof useBookSideTextures>;
   book2ProfileImageUrl: string | null;
   bookFocused: boolean;
+  portfolioLabel: string;
+  aboutLabel: string;
   onBookFocus: () => void;
 }
 
@@ -934,6 +1076,8 @@ function InteractiveBooks({
   book2DynamicContent,
   book2ProfileImageUrl,
   bookFocused,
+  portfolioLabel,
+  aboutLabel,
   onBookFocus,
   spotlightBook,
   onSpotlightChange,
@@ -1091,7 +1235,7 @@ function InteractiveBooks({
         />
         <BookLabel
           position={[0, 0, 0.6]}
-          text="Portfolio"
+          text={portfolioLabel}
           visible={labelsVisible && !bookFocused && !isSwapping}
         />
       </group>
@@ -1121,7 +1265,7 @@ function InteractiveBooks({
           />
           <BookLabel
             position={[0, 0, 0.6]}
-            text="About"
+            text={aboutLabel}
             visible={labelsVisible && !bookFocused && !isSwapping}
           />
         </group>
@@ -1201,12 +1345,14 @@ export default function Hero() {
   const [loaderProgressPercent, setLoaderProgressPercent] = useState(0);
   const [showLoaderOverlay, setShowLoaderOverlay] = useState(true);
   const [revealStarted, setRevealStarted] = useState(false);
+  const [language, setLanguage] = useState<LanguageCode>('id');
 
   const profileResolved = resolvedProfileName !== null;
   const sceneProfile = profileResolved
     ? SCENE_PROFILES[resolvedProfileName]
     : SCENE_PROFILES.mobile;
   const isLowEndDevice = sceneProfile.name === 'mobile';
+  const translatedText = HERO_TRANSLATIONS[language];
 
   useEffect(() => {
     if (gpu || gpuDetectTimedOut) {
@@ -1295,7 +1441,6 @@ export default function Hero() {
   // Camera focus state
   const [cameraPhase, setCameraPhase] = useState<CameraPhase>('overview');
   const bookFocused = cameraPhase === 'focused' || cameraPhase === 'focusing';
-  const [isDevFreeRoam, setIsDevFreeRoam] = useState(false);
 
 
   const [spotlightBook, setSpotlightBook] = useState<BookId>('book1');
@@ -1314,11 +1459,6 @@ export default function Hero() {
 
   // Use the dynamic atom for the setter
   const setSpotlightPage = useSetAtom(activeBookAtom);
-  const setBook1Page = useSetAtom(bookAtom);
-  const setBook2Page = useSetAtom(book2Atom);
-  const setBook3Page = useSetAtom(book3Atom);
-  const setBook4Page = useSetAtom(book4Atom);
-  const setBook5Page = useSetAtom(book5Atom);
 
   // Auto-open front cover when camera focuses on the book
   const [showBackButton, setShowBackButton] = useState(false);
@@ -1347,13 +1487,10 @@ export default function Hero() {
   }, [cameraPhase, setSpotlightPage]);
 
   const handleBookFocus = useCallback(() => {
-    if (isDevFreeRoam) {
-      return;
-    }
     if (cameraPhase === 'overview') {
       setCameraPhase('focusing');
     }
-  }, [cameraPhase, isDevFreeRoam]);
+  }, [cameraPhase]);
 
   const handleBackToOverview = useCallback(() => {
     if (cameraPhase === 'focused') {
@@ -1369,22 +1506,9 @@ export default function Hero() {
     });
   }, []);
 
-  const handleEnableDevFreeRoam = useCallback(() => {
-    setShowBackButton(false);
-    setIsDevFreeRoam(true);
+  const handleToggleLanguage = useCallback(() => {
+    setLanguage((prev) => (prev === 'id' ? 'en' : 'id'));
   }, []);
-
-  const handleResetToDefaultCamera = useCallback(() => {
-    setIsDevFreeRoam(false);
-    setShowBackButton(false);
-    setCameraPhase('overview');
-    setSpotlightBook('book1');
-    setBook1Page(0);
-    setBook2Page(0);
-    setBook3Page(0);
-    setBook4Page(0);
-    setBook5Page(0);
-  }, [setBook1Page, setBook2Page, setBook3Page, setBook4Page, setBook5Page]);
 
   const book2Pages = useMemo(
     () => createBlankBookInteriorPages(sceneProfile.secondBookSheetCount),
@@ -1510,6 +1634,7 @@ export default function Hero() {
               rotation={LAMP_ROTATION}
               lightsOn={true}
               enableShadows={sceneProfile.enableShadows}
+              stringMessage={translatedText.lampStringMessage}
             />
 
             <InteractiveBooks
@@ -1528,6 +1653,8 @@ export default function Hero() {
               book2DynamicContent={book2DynamicContent}
               book2ProfileImageUrl={book2ProfileImageUrl}
               bookFocused={bookFocused}
+              portfolioLabel={translatedText.portfolioLabel}
+              aboutLabel={translatedText.aboutLabel}
               onBookFocus={handleBookFocus}
               spotlightBook={spotlightBook}
               onSpotlightChange={setSpotlightBook}
@@ -1544,6 +1671,16 @@ export default function Hero() {
               position={ANTIQUE_GLOBE_POSITION}
               rotation={ANTIQUE_GLOBE_ROTATION}
               scale={ANTIQUE_GLOBE_SCALE}
+            />
+            <LanguageToggle3D
+              enableShadows={sceneProfile.enableShadows}
+              language={language}
+              languageLabel={translatedText.languageLabel}
+              hintPrefix={translatedText.languageToggleHint}
+              onToggleLanguage={handleToggleLanguage}
+              position={LANGUAGE_TOGGLE_POSITION}
+              rotation={LANGUAGE_TOGGLE_ROTATION_RAD}
+              scale={LANGUAGE_TOGGLE_SCALE}
             />
             <DeskNamePlaque
               enableShadows={sceneProfile.enableShadows}
@@ -1577,26 +1714,10 @@ export default function Hero() {
           </EffectComposer>
         )}
 
-        {!isDevFreeRoam && (
-          <CameraSetup phase={cameraPhase} onTransitionDone={handleTransitionDone} />
-        )}
-        {isDevFreeRoam && (
-          <OrbitControls
-            makeDefault
-            enableDamping
-            dampingFactor={0.08}
-            target={[
-              DESK_PLAQUE_POSITION[0],
-              DESK_PLAQUE_POSITION[1] + 0.08,
-              DESK_PLAQUE_POSITION[2],
-            ]}
-            minDistance={0.6}
-            maxDistance={8}
-          />
-        )}
+        <CameraSetup phase={cameraPhase} onTransitionDone={handleTransitionDone} />
 
         {/* 3D Home button — on the left page (back of front cover), vintage style */}
-        {(cameraPhase === 'focused' && !isDevFreeRoam) && (
+        {cameraPhase === 'focused' && (
           <group position={spotlightBook === 'book2' ? BOOK2_BACK_BUTTON_POSITION : BOOK1_BACK_BUTTON_POSITION}>
             <Html
               center
@@ -1636,33 +1757,12 @@ export default function Hero() {
                   e.currentTarget.style.textDecoration = 'none';
                 }}
               >
-                ← Kembali
+                {`← ${translatedText.backButton}`}
               </button>
             </Html>
           </group>
         )}
       </Canvas>
-
-      {!showLoaderOverlay && (
-        <div className="absolute top-4 right-4 z-30 flex items-center gap-2">
-          {!isDevFreeRoam && (
-            <button
-              type="button"
-              onClick={handleEnableDevFreeRoam}
-              className="rounded-md border border-[#f5e4c0]/40 bg-black/60 px-3 py-1.5 text-[11px] uppercase tracking-[0.12em] text-[#f5e4c0] hover:bg-black/75 transition-colors"
-            >
-              Free Roam (Dev)
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={handleResetToDefaultCamera}
-            className="rounded-md border border-[#f5e4c0]/40 bg-black/60 px-3 py-1.5 text-[11px] uppercase tracking-[0.12em] text-[#f5e4c0] hover:bg-black/75 transition-colors"
-          >
-            Reset Kamera
-          </button>
-        </div>
-      )}
 
       {showLoaderOverlay && (
         <div
@@ -1692,12 +1792,12 @@ export default function Hero() {
             </div>
             <p className="text-[11px] uppercase tracking-[0.28em] text-[#f5e4c0]/70">
               {!profileResolved
-                ? 'Optimizing Device'
+                ? translatedText.loaderOptimizingDevice
                 : sceneAssetsReady
-                  ? 'Opening Scene'
+                  ? translatedText.loaderOpeningScene
                   : assetsLoading
-                    ? 'Loading Scene'
-                    : 'Preparing Scene'}
+                    ? translatedText.loaderLoadingScene
+                    : translatedText.loaderPreparingScene}
             </p>
           </div>
         </div>
@@ -1705,3 +1805,4 @@ export default function Hero() {
     </div>
   );
 }
+
