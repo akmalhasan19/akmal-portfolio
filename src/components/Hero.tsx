@@ -95,6 +95,9 @@ const LAMP_SCALE = 3.8;
 const LAMP_BULB_POSITION: [number, number, number] = [-1.1, 1.4, 0];
 const LAMP_REFLECTOR_POSITION: [number, number, number] = [-0.6, 0.65, 0.2];
 const LAMP_TARGET_POSITION: [number, number, number] = [-0.55, -0.5, 0.2];
+const ANTIQUE_GLOBE_POSITION: [number, number, number] = [-2.65, 0.57, 2.05];
+const ANTIQUE_GLOBE_ROTATION: [number, number, number] = [0, 0.8, 0];
+const ANTIQUE_GLOBE_SCALE = 2.4;
 // Old desk lamp pull-string interaction tuning.
 const LAMP_STRING_HOTSPOT_POSITION: [number, number, number] = [0.11, 0.29, 0.02];
 const LAMP_STRING_HOTSPOT_SIZE: [number, number, number] = [0.08, 0.35, 0.08];
@@ -102,7 +105,7 @@ const LAMP_STRING_MESSAGE_POSITION: [number, number, number] = [0.26, 0.18, 0.06
 const LAMP_STRING_MESSAGE_TIMEOUT_MS = 4200;
 
 // Desk name plaque transform (edit x/y/z directly).
-const DESK_PLAQUE_POSITION: [number, number, number] = [1, -0.15, 1.25];
+const DESK_PLAQUE_POSITION: [number, number, number] = [1.2, -0.15, 1.25];
 const DESK_PLAQUE_ROTATION_DEG: [number, number, number] = [0, -27, 0];
 const DESK_PLAQUE_SCALE = 0.07;
 const DESK_PLAQUE_ROTATION_RAD: [number, number, number] = [
@@ -147,6 +150,7 @@ const CORE_MODEL_PATHS = [
   '/models/simple_old_mug/scene.gltf',
   '/models/mini_plant/scene.gltf',
   '/models/ballpoin_golden/scene.gltf',
+  '/models/antique_globe/antique_globe.glb',
   '/models/desk_name_plaque/desk_name_plaque_2_kinds.glb',
 ] as const;
 
@@ -708,6 +712,50 @@ function CoffeeMug({ steamEnabled, enableShadows, ...props }: CoffeeMugProps) {
         <meshStandardMaterial color="#0f0802" roughness={0.2} metalness={0.1} />
       </mesh>
       {steamEnabled && <CoffeeSteam />}
+    </group>
+  );
+}
+
+type AntiqueGlobeProps = ThreeElements['group'] & {
+  enableShadows: boolean;
+};
+
+function AntiqueGlobe({ enableShadows, ...props }: AntiqueGlobeProps) {
+  const { nodes, materials } = useGLTF('/models/antique_globe/antique_globe.glb') as unknown as {
+    nodes: {
+      Globe_Base_low001_Globe_Base_0: Mesh;
+      Globe_low001_Globe003_0: Mesh;
+    };
+    materials: {
+      Globe_Base: MeshStandardMaterial;
+      'Globe.003': MeshStandardMaterial;
+    };
+  };
+
+  return (
+    <group {...props} dispose={null}>
+      <group rotation={[-Math.PI / 2, 0, 0]} scale={0.133}>
+        <group rotation={[Math.PI / 2, 0, 0]} scale={0.01}>
+          <mesh
+            castShadow={enableShadows}
+            receiveShadow={enableShadows}
+            geometry={nodes.Globe_Base_low001_Globe_Base_0.geometry}
+            material={materials.Globe_Base}
+            position={[567.687, -207.548, 0]}
+            rotation={[-Math.PI / 2, 0, 0]}
+            scale={100}
+          />
+          <mesh
+            castShadow={enableShadows}
+            receiveShadow={enableShadows}
+            geometry={nodes.Globe_low001_Globe003_0.geometry}
+            material={materials['Globe.003']}
+            position={[564.611, 4.648, 0]}
+            rotation={[-1.771, 0.044, -0.421]}
+            scale={100}
+          />
+        </group>
+      </group>
     </group>
   );
 }
@@ -1491,6 +1539,12 @@ export default function Hero() {
               position={[1.3, 0.04, -0.6]}
               rotation={[0, Math.PI / -2, 0]}
             />
+            <AntiqueGlobe
+              enableShadows={sceneProfile.enableShadows}
+              position={ANTIQUE_GLOBE_POSITION}
+              rotation={ANTIQUE_GLOBE_ROTATION}
+              scale={ANTIQUE_GLOBE_SCALE}
+            />
             <DeskNamePlaque
               enableShadows={sceneProfile.enableShadows}
               position={DESK_PLAQUE_POSITION}
@@ -1500,7 +1554,7 @@ export default function Hero() {
             {sceneProfile.renderPlant && (
               <Model
                 path="/models/mini_plant/scene.gltf"
-                position={[-1, -0.15, 0.8]}
+                position={[-0.65, -0.15, 0.8]}
                 scale={2}
                 rotation={[0, 2, 0]}
                 enableShadows={sceneProfile.enableShadows}
