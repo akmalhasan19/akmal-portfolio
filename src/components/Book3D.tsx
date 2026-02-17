@@ -1,4 +1,5 @@
-import { useCursor, useTexture } from "@react-three/drei";
+import { useTexture } from "@react-three/drei/core/Texture";
+import { useCursor } from "@react-three/drei/web/useCursor";
 import { ThreeElements, useFrame } from "@react-three/fiber";
 import { atom, useAtom, useSetAtom, type PrimitiveAtom } from "jotai";
 import { easing } from "maath";

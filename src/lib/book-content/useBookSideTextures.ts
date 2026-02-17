@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import { CanvasTexture, SRGBColorSpace } from "three";
-import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { renderPageSideToCanvas } from "./render-canvas";
 import { pageSideKey } from "@/types/book-content";
 import type { BookKey, PageSideLayout, BookPageSideLayoutRow } from "@/types/book-content";
@@ -80,6 +79,10 @@ export function useBookSideTextures({
         let cancelled = false;
 
         const fetchAndRender = async () => {
+            const { getSupabaseBrowserClient } = await import("@/lib/supabase/client");
+            if (cancelled) {
+                return;
+            }
             const supabase = getSupabaseBrowserClient();
 
             const { data, error } = await supabase

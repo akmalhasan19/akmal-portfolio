@@ -1,10 +1,18 @@
 'use client';
 
+import { Caveat } from 'next/font/google';
+import dynamic from 'next/dynamic';
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, useFrame, useThree, ThreeElements } from '@react-three/fiber';
-import { Html, SpotLight, Text, useCursor, useDetectGPU, useGLTF, useProgress, useTexture } from '@react-three/drei';
 import type { ThreeEvent } from '@react-three/fiber';
-import { Bloom, EffectComposer, Vignette } from '@react-three/postprocessing';
+import type { TierResult } from 'detect-gpu';
+import { SpotLight } from '@react-three/drei/core/SpotLight';
+import { Text } from '@react-three/drei/core/Text';
+import { useGLTF } from '@react-three/drei/core/Gltf';
+import { useProgress } from '@react-three/drei/core/Progress';
+import { useTexture } from '@react-three/drei/core/Texture';
+import { Html } from '@react-three/drei/web/Html';
+import { useCursor } from '@react-three/drei/web/useCursor';
 import {
   ACESFilmicToneMapping,
   Group,
@@ -22,6 +30,16 @@ import { CoffeeSteam } from './CoffeeSteam';
 
 import { useBookSideTextures } from '@/lib/book-content/useBookSideTextures';
 import { useBookProfileImage } from '@/lib/book-content/useBookProfileImage';
+
+const caveat = Caveat({
+  variable: '--font-caveat',
+  subsets: ['latin'],
+});
+
+const PostProcessingEffects = dynamic(() => import('./PostProcessingEffects'), {
+  ssr: false,
+  loading: () => null,
+});
 
 interface ModelProps {
   path: string;
@@ -194,25 +212,15 @@ const pictures = [
   "DSC01489", "DSC02031", "DSC02064", "DSC02069",
 ];
 
-const CORE_MODEL_PATHS = [
+const CRITICAL_MODEL_PATHS = [
   '/models/mahogany_table/scene.gltf',
   '/models/old_desk_lamp/scene.gltf',
-  '/models/simple_old_mug/scene.gltf',
-  '/models/mini_plant/scene.gltf',
-  '/models/ballpoin_golden/scene.gltf',
-  '/models/antique_globe/antique_globe.glb',
-  '/models/desk_name_plaque/desk_name_plaque_2_kinds.glb',
 ] as const;
 
-const CORE_TEXTURE_PATHS = [
+const CRITICAL_TEXTURE_PATHS = [
   '/textures/book1-cover-front.webp',
   '/textures/book1-cover-back.webp',
 ] as const;
-
-if (typeof window !== 'undefined') {
-  CORE_MODEL_PATHS.forEach((path) => useGLTF.preload(path));
-  CORE_TEXTURE_PATHS.forEach((path) => useTexture.preload(path));
-}
 
 const createBookInteriorPages = (sheetCount: number) => {
   const generated: Array<{ front: string; back: string }> = [];
@@ -260,7 +268,7 @@ interface SceneProfile {
 const SCENE_PROFILES: Record<SceneProfile["name"], SceneProfile> = {
   mobile: {
     name: "mobile",
-    dpr: [0.75, 1],
+    dpr: [0.5, 0.75],
     antialias: false,
     enableShadows: false,
     shadowMapSize: 512,
@@ -296,8 +304,8 @@ const SCENE_PROFILES: Record<SceneProfile["name"], SceneProfile> = {
     fifthBookSheetCount: 36,
     renderSteam: true,
     renderPlant: true,
-    // Load nearby pages first so hero settles faster; farther pages stream on demand.
-    bookTextureLoadRadius: 8,
+    // Load nearest pages first; farther pages stream in on demand.
+    bookTextureLoadRadius: 4,
   },
 };
 
@@ -414,6 +422,8 @@ const HERO_LOADER_MAX_PROGRESS_BEFORE_READY = 96;
 type CameraPhase = 'overview' | 'focusing' | 'focused' | 'book-closing' | 'unfocusing';
 const BOOK_CLOSE_DELAY_MS = 800;
 const BOOK2_CLOSE_DELAY_MS = 1450;
+const PRIMARY_BOOK_PAGE_SEGMENTS = 12;
+const BOOK1_INTERIOR_SHEET_COUNT = 16;
 
 /** Compute position along the spiral arc at parameter t ∈ [0, 1].
  *  Sweeps angle and shrinks radius from overview → book focus. */
@@ -551,7 +561,7 @@ function CameraSetup({ phase, onTransitionDone }: CameraSetupProps) {
 }
 
 function Model({ path, scale, position, rotation = [0, 0, 0], enableShadows = true }: ModelProps) {
-  const { scene } = useGLTF(path);
+  const { scene } = useGLTF(path, true, false);
   const clonedScene = useMemo(() => {
     const clone = scene.clone(true);
 
@@ -603,7 +613,7 @@ function DeskLampModel({
   enableShadows,
   stringMessage,
 }: DeskLampModelProps) {
-  const { scene } = useGLTF('/models/old_desk_lamp/scene.gltf');
+  const { scene } = useGLTF('/models/old_desk_lamp/scene.gltf', true, false);
   const [showStringMessage, setShowStringMessage] = useState(false);
   const [isLampInteractiveHover, setIsLampInteractiveHover] = useState(false);
   const messageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -779,7 +789,7 @@ type AntiqueGlobeProps = ThreeElements['group'] & {
 };
 
 function AntiqueGlobe({ enableShadows, ...props }: AntiqueGlobeProps) {
-  const { nodes, materials } = useGLTF('/models/antique_globe/antique_globe.glb') as unknown as {
+  const { nodes, materials } = useGLTF('/models/antique_globe/antique_globe.glb', true, false) as unknown as {
     nodes: {
       Globe_Base_low001_Globe_Base_0: Mesh;
       Globe_low001_Globe003_0: Mesh;
@@ -905,7 +915,7 @@ type DeskNamePlaqueProps = ThreeElements['group'] & {
 };
 
 function DeskNamePlaque({ enableShadows, ...props }: DeskNamePlaqueProps) {
-  const { nodes, materials } = useGLTF('/models/desk_name_plaque/desk_name_plaque_2_kinds.glb') as unknown as {
+  const { nodes, materials } = useGLTF('/models/desk_name_plaque/desk_name_plaque_2_kinds.glb', true, false) as unknown as {
     nodes: Record<string, Mesh>;
     materials: Record<string, MeshStandardMaterial>;
   };
@@ -1047,6 +1057,7 @@ interface InteractiveBooksProps {
   enableShadows: boolean;
   labelsVisible: boolean;
   textureLoadRadius: number;
+  book1Pages: Array<{ front: string; back: string }>;
   book2Pages: Array<{ front: string; back: string }>;
   book3Pages: Array<{ front: string; back: string }>;
   book4Pages: Array<{ front: string; back: string }>;
@@ -1068,6 +1079,7 @@ function InteractiveBooks({
   enableShadows,
   labelsVisible,
   textureLoadRadius,
+  book1Pages,
   book2Pages,
   book3Pages,
   book4Pages,
@@ -1219,6 +1231,7 @@ function InteractiveBooks({
       >
         <Book3D
           bookAtom={bookAtom}
+          pages={book1Pages}
           coverColor="#4a3020"
           coverFrontTexturePath="/textures/book1-cover-front.webp"
           coverBackTexturePath="/textures/book1-cover-back.webp"
@@ -1231,6 +1244,7 @@ function InteractiveBooks({
           onBookClick={() => handleBookClick('book1')}
           interactionDisabled={isSwapping || (bookFocused && spotlightBook !== 'book1')}
           onThicknessChange={setBook1Thickness}
+          pageSegments={PRIMARY_BOOK_PAGE_SEGMENTS}
           minPage={bookFocused && spotlightBook === 'book1' ? 1 : 0}
         />
         <BookLabel
@@ -1260,6 +1274,7 @@ function InteractiveBooks({
             onBookClick={() => handleBookClick('book2')}
             interactionDisabled={isSwapping || (bookFocused && spotlightBook !== 'book2')}
             onThicknessChange={setBook2Thickness}
+            pageSegments={PRIMARY_BOOK_PAGE_SEGMENTS}
             minPage={bookFocused && spotlightBook === 'book2' ? 1 : 0}
             chainBackwardTurns={true}
           />
@@ -1334,7 +1349,7 @@ function InteractiveBooks({
 export default function Hero() {
   const lampSpotRef = useRef<SpotLightImpl | null>(null);
   const lampTargetRef = useRef<Object3D | null>(null);
-  const gpu = useDetectGPU();
+  const [gpu, setGpu] = useState<Pick<TierResult, 'isMobile' | 'tier'> | null>(null);
   const { active: assetsLoading, progress: loadingProgress } = useProgress();
   const heroBootAtRef = useRef<number>(0);
   const loaderProgressRef = useRef(0);
@@ -1353,6 +1368,59 @@ export default function Hero() {
     : SCENE_PROFILES.mobile;
   const isLowEndDevice = sceneProfile.name === 'mobile';
   const translatedText = HERO_TRANSLATIONS[language];
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const detectGpu = async () => {
+      try {
+        const { getGPUTier } = await import('detect-gpu');
+        const result = await getGPUTier();
+        if (!cancelled) {
+          setGpu({ isMobile: result.isMobile, tier: result.tier });
+        }
+      } catch {
+        if (!cancelled) {
+          setGpu(null);
+        }
+      }
+    };
+
+    detectGpu();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let idleHandle: number | null = null;
+    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+
+    const preloadCriticalAssets = () => {
+      if (cancelled) {
+        return;
+      }
+      CRITICAL_MODEL_PATHS.forEach((path) => useGLTF.preload(path, true, false));
+      CRITICAL_TEXTURE_PATHS.forEach((path) => useTexture.preload(path));
+    };
+
+    if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+      idleHandle = window.requestIdleCallback(preloadCriticalAssets, { timeout: 1200 });
+    } else {
+      timeoutHandle = setTimeout(preloadCriticalAssets, 200);
+    }
+
+    return () => {
+      cancelled = true;
+      if (idleHandle !== null && typeof window !== 'undefined' && 'cancelIdleCallback' in window) {
+        window.cancelIdleCallback(idleHandle);
+      }
+      if (timeoutHandle !== null) {
+        clearTimeout(timeoutHandle);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (gpu || gpuDetectTimedOut) {
@@ -1455,6 +1523,7 @@ export default function Hero() {
       default: return bookAtom;
     }
   }, [spotlightBook]);
+  const currentBook1Page = useAtomValue(bookAtom);
   const currentSpotlightPage = useAtomValue(activeBookAtom);
 
   // Use the dynamic atom for the setter
@@ -1510,6 +1579,10 @@ export default function Hero() {
     setLanguage((prev) => (prev === 'id' ? 'en' : 'id'));
   }, []);
 
+  const book1Pages = useMemo(
+    () => createBlankBookInteriorPages(BOOK1_INTERIOR_SHEET_COUNT),
+    [],
+  );
   const book2Pages = useMemo(
     () => createBlankBookInteriorPages(sceneProfile.secondBookSheetCount),
     [sceneProfile.secondBookSheetCount],
@@ -1530,9 +1603,10 @@ export default function Hero() {
   // Dynamic content for Book 1
   const book1DynamicContent = useBookSideTextures({
     bookKey: "book-1",
-    totalPageEntries: 18, // 16 interior + 2 covers
+    totalPageEntries: book1Pages.length + 2, // interior sheets + 2 covers
     canvasHeight: isLowEndDevice ? 1024 : 1536,
     textureLoadRadius: sceneProfile.bookTextureLoadRadius,
+    currentPage: currentBook1Page,
     enabled: true,
   });
 
@@ -1558,7 +1632,7 @@ export default function Hero() {
   }, []);
 
   return (
-    <div className="h-screen w-full bg-[#101010] relative">
+    <div className={`${caveat.variable} h-screen w-full bg-[#101010] relative`}>
 
       {/* Book Controllers */}
       {/* <div className="absolute bottom-10 left-1/2 -translate-x-1/2 flex flex-col gap-2 z-10">
@@ -1620,99 +1694,100 @@ export default function Hero() {
         />
 
         {profileResolved && (
-          <Suspense fallback={null} key={sceneProfile.name}>
-            <Model
-              path="/models/mahogany_table/scene.gltf"
-              position={[0, -2.1, 0]}
-              scale={0.3}
-              rotation={[0, 0, 0]}
-              enableShadows={sceneProfile.enableShadows}
-            />
-            <DeskLampModel
-              position={LAMP_POSITION}
-              scale={LAMP_SCALE}
-              rotation={LAMP_ROTATION}
-              lightsOn={true}
-              enableShadows={sceneProfile.enableShadows}
-              stringMessage={translatedText.lampStringMessage}
-            />
-
-            <InteractiveBooks
-              renderSecondBook={sceneProfile.renderSecondBook}
-              renderThirdBook={sceneProfile.renderThirdBook}
-              renderFourthBook={sceneProfile.renderFourthBook}
-              renderFifthBook={sceneProfile.renderFifthBook}
-              enableShadows={sceneProfile.enableShadows}
-              labelsVisible={!showLoaderOverlay}
-              textureLoadRadius={sceneProfile.bookTextureLoadRadius}
-              book2Pages={book2Pages}
-              book3Pages={book3Pages}
-              book4Pages={book4Pages}
-              book5Pages={book5Pages}
-              book1DynamicContent={book1DynamicContent}
-              book2DynamicContent={book2DynamicContent}
-              book2ProfileImageUrl={book2ProfileImageUrl}
-              bookFocused={bookFocused}
-              portfolioLabel={translatedText.portfolioLabel}
-              aboutLabel={translatedText.aboutLabel}
-              onBookFocus={handleBookFocus}
-              spotlightBook={spotlightBook}
-              onSpotlightChange={setSpotlightBook}
-            />
-
-            <CoffeeMug
-              steamEnabled={sceneProfile.renderSteam}
-              enableShadows={sceneProfile.enableShadows}
-              position={[1.3, 0.04, -0.6]}
-              rotation={[0, Math.PI / -2, 0]}
-            />
-            <AntiqueGlobe
-              enableShadows={sceneProfile.enableShadows}
-              position={ANTIQUE_GLOBE_POSITION}
-              rotation={ANTIQUE_GLOBE_ROTATION}
-              scale={ANTIQUE_GLOBE_SCALE}
-            />
-            <LanguageToggle3D
-              enableShadows={sceneProfile.enableShadows}
-              language={language}
-              languageLabel={translatedText.languageLabel}
-              hintPrefix={translatedText.languageToggleHint}
-              onToggleLanguage={handleToggleLanguage}
-              position={LANGUAGE_TOGGLE_POSITION}
-              rotation={LANGUAGE_TOGGLE_ROTATION_RAD}
-              scale={LANGUAGE_TOGGLE_SCALE}
-            />
-            <DeskNamePlaque
-              enableShadows={sceneProfile.enableShadows}
-              position={DESK_PLAQUE_POSITION}
-              rotation={DESK_PLAQUE_ROTATION_RAD}
-              scale={DESK_PLAQUE_SCALE}
-            />
-            {sceneProfile.renderPlant && (
+          <>
+            <Suspense fallback={null} key={`${sceneProfile.name}-core`}>
               <Model
-                path="/models/mini_plant/scene.gltf"
-                position={[-0.65, -0.15, 0.8]}
-                scale={2}
-                rotation={[0, 2, 0]}
+                path="/models/mahogany_table/scene.gltf"
+                position={[0, -2.1, 0]}
+                scale={0.3}
+                rotation={[0, 0, 0]}
                 enableShadows={sceneProfile.enableShadows}
               />
-            )}
-            <Model
-              path="/models/ballpoin_golden/scene.gltf"
-              position={[1, 0.16, 0.1]}
-              scale={0.3}
-              rotation={[0, 0.5, 1.57]}
-              enableShadows={sceneProfile.enableShadows}
-            />
-            <SceneReadySignal onReady={handleSceneAssetsReady} />
-          </Suspense>
+              <DeskLampModel
+                position={LAMP_POSITION}
+                scale={LAMP_SCALE}
+                rotation={LAMP_ROTATION}
+                lightsOn={true}
+                enableShadows={sceneProfile.enableShadows}
+                stringMessage={translatedText.lampStringMessage}
+              />
+
+              <InteractiveBooks
+                renderSecondBook={sceneProfile.renderSecondBook}
+                renderThirdBook={sceneProfile.renderThirdBook}
+                renderFourthBook={sceneProfile.renderFourthBook}
+                renderFifthBook={sceneProfile.renderFifthBook}
+                enableShadows={sceneProfile.enableShadows}
+                labelsVisible={!showLoaderOverlay}
+                textureLoadRadius={sceneProfile.bookTextureLoadRadius}
+                book1Pages={book1Pages}
+                book2Pages={book2Pages}
+                book3Pages={book3Pages}
+                book4Pages={book4Pages}
+                book5Pages={book5Pages}
+                book1DynamicContent={book1DynamicContent}
+                book2DynamicContent={book2DynamicContent}
+                book2ProfileImageUrl={book2ProfileImageUrl}
+                bookFocused={bookFocused}
+                portfolioLabel={translatedText.portfolioLabel}
+                aboutLabel={translatedText.aboutLabel}
+                onBookFocus={handleBookFocus}
+                spotlightBook={spotlightBook}
+                onSpotlightChange={setSpotlightBook}
+              />
+
+              <CoffeeMug
+                steamEnabled={sceneProfile.renderSteam}
+                enableShadows={sceneProfile.enableShadows}
+                position={[1.3, 0.04, -0.6]}
+                rotation={[0, Math.PI / -2, 0]}
+              />
+              <LanguageToggle3D
+                enableShadows={sceneProfile.enableShadows}
+                language={language}
+                languageLabel={translatedText.languageLabel}
+                hintPrefix={translatedText.languageToggleHint}
+                onToggleLanguage={handleToggleLanguage}
+                position={LANGUAGE_TOGGLE_POSITION}
+                rotation={LANGUAGE_TOGGLE_ROTATION_RAD}
+                scale={LANGUAGE_TOGGLE_SCALE}
+              />
+              <Model
+                path="/models/ballpoin_golden/scene.gltf"
+                position={[1, 0.16, 0.1]}
+                scale={0.3}
+                rotation={[0, 0.5, 1.57]}
+                enableShadows={sceneProfile.enableShadows}
+              />
+              <SceneReadySignal onReady={handleSceneAssetsReady} />
+            </Suspense>
+
+            <Suspense fallback={null} key={`${sceneProfile.name}-details`}>
+              <AntiqueGlobe
+                enableShadows={sceneProfile.enableShadows}
+                position={ANTIQUE_GLOBE_POSITION}
+                rotation={ANTIQUE_GLOBE_ROTATION}
+                scale={ANTIQUE_GLOBE_SCALE}
+              />
+              <DeskNamePlaque
+                enableShadows={sceneProfile.enableShadows}
+                position={DESK_PLAQUE_POSITION}
+                rotation={DESK_PLAQUE_ROTATION_RAD}
+                scale={DESK_PLAQUE_SCALE}
+              />
+              {sceneProfile.renderPlant && (
+                <Model
+                  path="/models/mini_plant/scene.gltf"
+                  position={[-0.65, -0.15, 0.8]}
+                  scale={2}
+                  rotation={[0, 2, 0]}
+                  enableShadows={sceneProfile.enableShadows}
+                />
+              )}
+            </Suspense>
+          </>
         )}
-        {sceneProfile.enablePostProcessing && (
-          <EffectComposer enableNormalPass={false} multisampling={0}>
-            <Bloom luminanceThreshold={1.2} mipmapBlur intensity={0.25} />
-            <Vignette eskil={false} offset={0.1} darkness={1.05} />
-          </EffectComposer>
-        )}
+        {sceneProfile.enablePostProcessing && !showLoaderOverlay && <PostProcessingEffects />}
 
         <CameraSetup phase={cameraPhase} onTransitionDone={handleTransitionDone} />
 

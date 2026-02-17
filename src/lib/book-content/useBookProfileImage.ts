@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import type { BookKey } from "@/types/book-content";
 
 interface UseBookProfileImageOptions {
@@ -23,6 +22,10 @@ export function useBookProfileImage({
         let cancelled = false;
 
         const fetchProfileImage = async () => {
+            const { getSupabaseBrowserClient } = await import("@/lib/supabase/client");
+            if (cancelled) {
+                return;
+            }
             const supabase = getSupabaseBrowserClient();
             const { data, error } = await supabase
                 .from("book_profile_images")

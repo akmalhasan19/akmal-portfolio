@@ -1,7 +1,27 @@
 {
+  "asset": {
+    "generator": "glTF-Transform v4.3.0",
+    "version": "2.0",
+    "extras": {
+      "author": "Jeff Meunier (https://sketchfab.com/Jeff_Meunier)",
+      "license": "CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)",
+      "source": "https://sketchfab.com/3d-models/old-vintage-desk-lamp-0fd07d3289ac4b9cbf59465b937ba9a0",
+      "title": "Old vintage desk lamp"
+    }
+  },
   "accessors": [
     {
-      "bufferView": 2,
+      "type": "SCALAR",
+      "componentType": 5123,
+      "count": 44460
+    },
+    {
+      "type": "VEC3",
+      "componentType": 5126,
+      "count": 9846
+    },
+    {
+      "type": "VEC3",
       "componentType": 5126,
       "count": 9846,
       "max": [
@@ -11,236 +31,26 @@
       ],
       "min": [
         -15.392373085021973,
-        4.023313522338867e-06,
+        0.000004023313522338867,
         -9.8819580078125
-      ],
-      "type": "VEC3"
+      ]
     },
     {
-      "bufferView": 2,
-      "byteOffset": 118152,
+      "type": "VEC4",
       "componentType": 5126,
-      "count": 9846,
-      "max": [
-        1.0,
-        1.0,
-        1.0
-      ],
-      "min": [
-        -1.0,
-        -1.0,
-        -1.0
-      ],
-      "type": "VEC3"
+      "count": 9846
     },
     {
-      "bufferView": 3,
+      "type": "VEC2",
       "componentType": 5126,
-      "count": 9846,
-      "max": [
-        0.9999986886978149,
-        0.999987781047821,
-        0.9999999403953552,
-        1.0
-      ],
-      "min": [
-        -0.9999991059303284,
-        -0.9999986290931702,
-        -0.9999821782112122,
-        1.0
-      ],
-      "type": "VEC4"
-    },
-    {
-      "bufferView": 1,
-      "componentType": 5126,
-      "count": 9846,
-      "max": [
-        1.0,
-        0.9854621291160583
-      ],
-      "min": [
-        0.0,
-        2.419193859994062e-15
-      ],
-      "type": "VEC2"
-    },
-    {
-      "bufferView": 0,
-      "componentType": 5125,
-      "count": 44460,
-      "type": "SCALAR"
+      "count": 9846
     }
   ],
-  "asset": {
-    "extras": {
-      "author": "Jeff Meunier (https://sketchfab.com/Jeff_Meunier)",
-      "license": "CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)",
-      "source": "https://sketchfab.com/3d-models/old-vintage-desk-lamp-0fd07d3289ac4b9cbf59465b937ba9a0",
-      "title": "Old vintage desk lamp"
-    },
-    "generator": "Sketchfab-15.31.0",
-    "version": "2.0"
-  },
   "bufferViews": [
     {
       "buffer": 0,
-      "byteLength": 177840,
-      "name": "floatBufferViews",
-      "target": 34963
-    },
-    {
-      "buffer": 0,
-      "byteLength": 78768,
-      "byteOffset": 177840, 
-      "byteStride": 8,
-      "name": "floatBufferViews",
-      "target": 34962
-    },
-    {
-      "buffer": 0,
-      "byteLength": 236304,
-      "byteOffset": 256608,
-      "byteStride": 12,
-      "name": "floatBufferViews",
-      "target": 34962
-    },
-    {
-      "buffer": 0,
-      "byteLength": 157536,
-      "byteOffset": 492912,
-      "byteStride": 16,
-      "name": "floatBufferViews",
-      "target": 34962
-    }
-  ],
-  "buffers": [
-    {
-      "byteLength": 650448,
-      "uri": "scene.bin"
-    }
-  ],
-  "images": [
-    {
-      "uri": "textures/Lamp_baseColor.png"
-    },
-    {
-      "uri": "textures/Lamp_metallicRoughness.png"
-    },
-    {
-      "uri": "textures/Lamp_emissive.png"
-    },
-    {
-      "uri": "textures/Lamp_normal.png"
-    }
-  ],
-  "materials": [
-    {
-      "doubleSided": true,
-      "emissiveFactor": [
-        1.0,
-        1.0,
-        1.0
-      ],
-      "emissiveTexture": {
-        "index": 2
-      },
-      "name": "Lamp",
-      "normalTexture": {
-        "index": 3
-      },
-      "pbrMetallicRoughness": {
-        "baseColorTexture": {
-          "index": 0
-        },
-        "metallicRoughnessTexture": {
-          "index": 1
-        }
-      }
-    }
-  ],
-  "meshes": [
-    {
-      "name": "Lamp1_Lamp_0",
-      "primitives": [
-        {
-          "attributes": {
-            "NORMAL": 1,
-            "POSITION": 0,
-            "TANGENT": 2,
-            "TEXCOORD_0": 3
-          },
-          "indices": 4,
-          "material": 0,
-          "mode": 4
-        }
-      ]
-    }
-  ],
-  "nodes": [
-    {
-      "children": [
-        1
-      ],
-      "matrix": [
-        1.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        2.220446049250313e-16,
-        -1.0,
-        0.0,
-        0.0,
-        1.0,
-        2.220446049250313e-16,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        1.0
-      ],
-      "name": "Sketchfab_model"
-    },
-    {
-      "children": [
-        2
-      ],
-      "matrix": [
-        0.009999999776482582,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.009999999776482582,
-        0.0,
-        0.0,
-        -0.009999999776482582,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        1.0
-      ],
-      "name": "Lamp.fbx"
-    },
-    {
-      "children": [
-        3
-      ],
-      "name": "RootNode"
-    },
-    {
-      "children": [
-        4
-      ],
-      "name": "Lamp1"
-    },
-    {
-      "mesh": 0,
-      "name": "Lamp1_Lamp_0"
+      "byteOffset": 0,
+      "byteLength": 90265
     }
   ],
   "samplers": [
@@ -251,7 +61,149 @@
       "wrapT": 10497
     }
   ],
-  "scene": 0,
+  "textures": [
+    {
+      "source": 0,
+      "sampler": 0
+    },
+    {
+      "source": 2,
+      "sampler": 0
+    },
+    {
+      "source": 3,
+      "sampler": 0
+    },
+    {
+      "source": 1,
+      "sampler": 0
+    }
+  ],
+  "images": [
+    {
+      "mimeType": "image/png",
+      "uri": "textures/Lamp_baseColor.png"
+    },
+    {
+      "mimeType": "image/png",
+      "uri": "textures/Lamp_metallicRoughness.png"
+    },
+    {
+      "mimeType": "image/png",
+      "uri": "textures/Lamp_emissive.png"
+    },
+    {
+      "mimeType": "image/png",
+      "uri": "textures/Lamp_normal.png"
+    }
+  ],
+  "buffers": [
+    {
+      "uri": "scene.bin",
+      "byteLength": 90265
+    }
+  ],
+  "materials": [
+    {
+      "name": "Lamp",
+      "doubleSided": true,
+      "pbrMetallicRoughness": {
+        "baseColorTexture": {
+          "index": 0
+        },
+        "metallicRoughnessTexture": {
+          "index": 3
+        }
+      },
+      "emissiveFactor": [
+        1,
+        1,
+        1
+      ],
+      "emissiveTexture": {
+        "index": 1
+      },
+      "normalTexture": {
+        "index": 2
+      }
+    }
+  ],
+  "meshes": [
+    {
+      "name": "Lamp1_Lamp_0",
+      "primitives": [
+        {
+          "attributes": {
+            "NORMAL": 1,
+            "POSITION": 2,
+            "TANGENT": 3,
+            "TEXCOORD_0": 4
+          },
+          "mode": 4,
+          "material": 0,
+          "indices": 0,
+          "extensions": {
+            "KHR_draco_mesh_compression": {
+              "bufferView": 0,
+              "attributes": {
+                "NORMAL": 0,
+                "POSITION": 1,
+                "TANGENT": 2,
+                "TEXCOORD_0": 3
+              }
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "name": "Sketchfab_model",
+      "rotation": [
+        -0.7071067811865475,
+        0,
+        0,
+        0.7071067811865476
+      ],
+      "children": [
+        1
+      ]
+    },
+    {
+      "name": "Lamp.fbx",
+      "rotation": [
+        0.7071067811865475,
+        0,
+        0,
+        0.7071067811865476
+      ],
+      "scale": [
+        0.009999999776482582,
+        0.009999999776482582,
+        0.009999999776482582
+      ],
+      "children": [
+        2
+      ]
+    },
+    {
+      "name": "RootNode",
+      "children": [
+        3
+      ]
+    },
+    {
+      "name": "Lamp1",
+      "children": [
+        4
+      ]
+    },
+    {
+      "name": "Lamp1_Lamp_0",
+      "mesh": 0
+    }
+  ],
   "scenes": [
     {
       "name": "Sketchfab_Scene",
@@ -260,22 +212,11 @@
       ]
     }
   ],
-  "textures": [
-    {
-      "sampler": 0,
-      "source": 0
-    },
-    {
-      "sampler": 0,
-      "source": 1
-    },
-    {
-      "sampler": 0,
-      "source": 2
-    },
-    {
-      "sampler": 0,
-      "source": 3
-    }
+  "scene": 0,
+  "extensionsUsed": [
+    "KHR_draco_mesh_compression"
+  ],
+  "extensionsRequired": [
+    "KHR_draco_mesh_compression"
   ]
 }

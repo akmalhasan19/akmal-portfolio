@@ -1,9 +1,9 @@
-import Hero from "@/components/Hero";
+import HeroDynamic from "@/components/HeroDynamic";
 
 export default function Home() {
   return (
     <main className="min-h-screen bg-black">
-      <Hero />
+      <HeroDynamic />
     </main>
   );
 }
