@@ -1017,6 +1017,8 @@ export interface Book3DProps extends GroupProps {
   pageSegments?: number;
   /** Minimum page number allowed to flip to manually. Default 0. */
   minPage?: number;
+  /** Animate backward page navigation as chained flips instead of snapping. */
+  chainBackwardTurns?: boolean;
 
 }
 
@@ -1042,6 +1044,7 @@ export const Book3D = ({
   spineBaseOffset = [COVER_CONNECTOR_X_OFFSET, COVER_CONNECTOR_Y_OFFSET, COVER_CONNECTOR_Z_OFFSET],
   pageSegments,
   minPage = 0,
+  chainBackwardTurns = false,
 
   ...props
 }: Book3DProps) => {
@@ -1143,8 +1146,15 @@ export const Book3D = ({
         }
 
         if (page < currentDelayedPage) {
-          // Snap backward navigation (9 -> 8 -> 7 ...) without flip-chain animation.
-          return page;
+          if (!chainBackwardTurns) {
+            // Keep legacy behavior unless explicitly enabled by parent.
+            return page;
+          }
+          timeoutId = setTimeout(
+            goToPage,
+            Math.abs(page - currentDelayedPage) > 2 ? 50 : 140,
+          );
+          return currentDelayedPage - 1;
         }
 
         timeoutId = setTimeout(
@@ -1166,7 +1176,7 @@ export const Book3D = ({
         clearTimeout(timeoutId);
       }
     };
-  }, [page]);
+  }, [page, chainBackwardTurns]);
 
   useFrame((_, delta) => {
     if (!coverConnectorRef.current) {

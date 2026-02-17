@@ -2,12 +2,15 @@
 
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, useFrame, useThree, ThreeElements } from '@react-three/fiber';
-import { Html, SpotLight, useDetectGPU, useGLTF, useProgress, useTexture } from '@react-three/drei';
+import { Html, SpotLight, useCursor, useDetectGPU, useGLTF, useProgress, useTexture } from '@react-three/drei';
+import type { ThreeEvent } from '@react-three/fiber';
 import { Bloom, EffectComposer, Vignette } from '@react-three/postprocessing';
 import {
   ACESFilmicToneMapping,
   CanvasTexture,
   Group,
+  LinearFilter,
+  LinearMipmapLinearFilter,
   MathUtils,
   Mesh,
   MeshStandardMaterial,
@@ -96,6 +99,11 @@ const LAMP_SCALE = 3.8;
 const LAMP_BULB_POSITION: [number, number, number] = [-1.1, 1.4, 0];
 const LAMP_REFLECTOR_POSITION: [number, number, number] = [-0.6, 0.65, 0.2];
 const LAMP_TARGET_POSITION: [number, number, number] = [-0.55, -0.5, 0.2];
+// Old desk lamp pull-string interaction tuning.
+const LAMP_STRING_HOTSPOT_POSITION: [number, number, number] = [0.11, 0.29, 0.02];
+const LAMP_STRING_HOTSPOT_SIZE: [number, number, number] = [0.08, 0.35, 0.08];
+const LAMP_STRING_MESSAGE_POSITION: [number, number, number] = [0.26, 0.18, 0.06];
+const LAMP_STRING_MESSAGE_TIMEOUT_MS = 4200;
 
 // Desk name plaque transform (edit x/y/z directly).
 const DESK_PLAQUE_POSITION: [number, number, number] = [0.2, -0.15, 0.95];
@@ -343,6 +351,7 @@ const HERO_LOADER_MAX_PROGRESS_BEFORE_READY = 96;
 
 type CameraPhase = 'overview' | 'focusing' | 'focused' | 'book-closing' | 'unfocusing';
 const BOOK_CLOSE_DELAY_MS = 800;
+const BOOK2_CLOSE_DELAY_MS = 1450;
 
 /** Compute position along the spiral arc at parameter t ∈ [0, 1].
  *  Sweeps angle and shrinks radius from overview → book focus. */
@@ -525,6 +534,10 @@ interface DeskLampModelProps extends Omit<ModelProps, 'path'> {
 
 function DeskLampModel({ scale, position, rotation = [0, 0, 0], lightsOn, enableShadows }: DeskLampModelProps) {
   const { scene } = useGLTF('/models/old_desk_lamp/scene.gltf');
+  const [showStringMessage, setShowStringMessage] = useState(false);
+  const [isLampInteractiveHover, setIsLampInteractiveHover] = useState(false);
+  const messageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useCursor(isLampInteractiveHover);
   const lampScene = useMemo(() => {
     const clone = scene.clone(true);
 
@@ -580,13 +593,90 @@ function DeskLampModel({ scale, position, rotation = [0, 0, 0], lightsOn, enable
     });
   }, [lightsOn, lampScene]);
 
+  const showLampStringMessage = useCallback(() => {
+    setShowStringMessage(true);
+
+    if (messageTimerRef.current) {
+      clearTimeout(messageTimerRef.current);
+    }
+    messageTimerRef.current = setTimeout(() => {
+      setShowStringMessage(false);
+      messageTimerRef.current = null;
+    }, LAMP_STRING_MESSAGE_TIMEOUT_MS);
+  }, []);
+
+  const handleStringClick = useCallback((event: ThreeEvent<MouseEvent>) => {
+    event.stopPropagation();
+    showLampStringMessage();
+  }, [showLampStringMessage]);
+
+  const handleLampClick = useCallback((event: ThreeEvent<MouseEvent>) => {
+    event.stopPropagation();
+    showLampStringMessage();
+  }, [showLampStringMessage]);
+
+  useEffect(() => {
+    return () => {
+      if (messageTimerRef.current) {
+        clearTimeout(messageTimerRef.current);
+      }
+    };
+  }, []);
+
   return (
-    <primitive
-      object={lampScene}
+    <group
       scale={scale}
       position={position}
       rotation={rotation}
-    />
+    >
+      <primitive
+        object={lampScene}
+        onPointerOver={() => setIsLampInteractiveHover(true)}
+        onPointerOut={() => setIsLampInteractiveHover(false)}
+        onClick={handleLampClick}
+      />
+
+      <mesh
+        position={LAMP_STRING_HOTSPOT_POSITION}
+        onPointerOver={(event) => {
+          event.stopPropagation();
+          setIsLampInteractiveHover(true);
+        }}
+        onPointerOut={(event) => {
+          event.stopPropagation();
+          setIsLampInteractiveHover(false);
+        }}
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={handleStringClick}
+      >
+        <boxGeometry args={LAMP_STRING_HOTSPOT_SIZE} />
+        <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+      </mesh>
+
+      <Html
+        position={LAMP_STRING_MESSAGE_POSITION}
+        center
+        style={{
+          pointerEvents: 'none',
+          transition: 'opacity 0.35s ease',
+          opacity: showStringMessage ? 1 : 0,
+          whiteSpace: 'nowrap',
+          zIndex: 0,
+        }}
+      >
+        <span
+          style={{
+            fontFamily: 'var(--font-caveat), "Caveat", cursive',
+            fontSize: '1.35rem',
+            color: '#ead4a1',
+            textShadow: '0 2px 4px rgba(0,0,0,0.8)',
+            fontWeight: 700,
+          }}
+        >
+          Not yet. Some of us are still learning to see in the light
+        </span>
+      </Html>
+    </group>
   );
 }
 
@@ -620,43 +710,52 @@ type DeskNamePlaqueProps = ThreeElements['group'] & {
 };
 
 function DeskNamePlaque({ enableShadows, nameText = 'Akmal Hasan Mulyadi', ...props }: DeskNamePlaqueProps) {
+  const maxAnisotropy = useThree((state) => state.gl.capabilities.getMaxAnisotropy());
+
   const nameplateTexture = useMemo(() => {
     const canvas = document.createElement('canvas');
-    canvas.width = 1536;
-    canvas.height = 256;
+    // Match the plaque face aspect ratio and increase resolution for sharper text.
+    canvas.width = 3072;
+    canvas.height = 320;
 
     const context = canvas.getContext('2d');
     if (!context) {
       return null;
     }
 
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = 'high';
     context.fillStyle = '#d3b06f';
     context.fillRect(0, 0, canvas.width, canvas.height);
 
     context.strokeStyle = '#7d5e2f';
-    context.lineWidth = 16;
-    context.strokeRect(12, 12, canvas.width - 24, canvas.height - 24);
+    context.lineWidth = 20;
+    context.strokeRect(16, 16, canvas.width - 32, canvas.height - 32);
 
     const plaqueText = nameText.toUpperCase();
-    let fontSize = 102;
-    const maxTextWidth = canvas.width - 120;
+    let fontSize = 126;
+    const maxTextWidth = canvas.width - 180;
     context.fillStyle = '#2a1c0d';
     context.textAlign = 'center';
     context.textBaseline = 'middle';
-    while (fontSize > 48) {
+    while (fontSize > 56) {
       context.font = `700 ${fontSize}px 'Georgia', 'Times New Roman', serif`;
       if (context.measureText(plaqueText).width <= maxTextWidth) {
         break;
       }
       fontSize -= 2;
     }
-    context.fillText(plaqueText, canvas.width / 2, canvas.height / 2 + 6);
+    context.fillText(plaqueText, canvas.width / 2, canvas.height / 2 + 8);
 
     const texture = new CanvasTexture(canvas);
     texture.colorSpace = SRGBColorSpace;
+    texture.anisotropy = Math.max(1, maxAnisotropy);
+    texture.minFilter = LinearMipmapLinearFilter;
+    texture.magFilter = LinearFilter;
+    texture.generateMipmaps = true;
     texture.needsUpdate = true;
     return texture;
-  }, [nameText]);
+  }, [maxAnisotropy, nameText]);
 
   useEffect(() => () => {
     nameplateTexture?.dispose();
@@ -963,6 +1062,7 @@ function InteractiveBooks({
             interactionDisabled={isSwapping || (bookFocused && spotlightBook !== 'book2')}
             onThicknessChange={setBook2Thickness}
             minPage={bookFocused && spotlightBook === 'book2' ? 1 : 0}
+            chainBackwardTurns={true}
           />
           <BookLabel
             position={[0, 0, 0.6]}
@@ -1174,10 +1274,11 @@ export default function Hero() {
       return () => clearTimeout(timer);
     } else if (cameraPhase === 'book-closing') {
       setSpotlightPage(0); // Close book
+      const closeDelayMs = spotlightBook === 'book2' ? BOOK2_CLOSE_DELAY_MS : BOOK_CLOSE_DELAY_MS;
       // Wait for the book closing animation, then start camera unfocusing
       const timer = setTimeout(() => {
         setCameraPhase('unfocusing');
-      }, BOOK_CLOSE_DELAY_MS);
+      }, closeDelayMs);
       return () => clearTimeout(timer);
     } else {
       setShowBackButton(false);
