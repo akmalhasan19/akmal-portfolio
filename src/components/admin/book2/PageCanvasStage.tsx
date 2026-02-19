@@ -20,6 +20,7 @@ import { sanitizeSvgCode, svgToDataUrl } from "@/lib/book-content/svg-utils";
 import { normalizePaperBackground } from "@/lib/book-content/paper-tone";
 import { useBookProfileImage } from "@/lib/book-content/useBookProfileImage";
 import { BASE_CANVAS_HEIGHT } from "@/lib/book-content/render-canvas";
+import { getBlockAspectRatio } from "@/lib/book-content/aspect-ratio";
 
 const CANVAS_DISPLAY_WIDTH = 600;
 const PAGE_ASPECT_RATIO = 1.71 / 1.28;
@@ -96,6 +97,18 @@ function getBounds(rects: BlockRect[]): BlockRect | null {
     };
 }
 
+function areIdListsEqual(a: string[], b: string[]): boolean {
+    if (a.length !== b.length) {
+        return false;
+    }
+    for (let i = 0; i < a.length; i += 1) {
+        if (a[i] !== b[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
 export function PageCanvasStage({
     layout,
     onLayoutChange,
@@ -114,6 +127,16 @@ export function PageCanvasStage({
     const stageRef = useRef<HTMLDivElement>(null);
     const [dragging, setDragging] = useState<DragState | null>(null);
     const [resizing, setResizing] = useState<ResizeState | null>(null);
+    const multiSelectedBounds = useMemo(() => {
+        if (selectedBlockIds.length <= 1) {
+            return null;
+        }
+        const selectedSet = new Set(selectedBlockIds);
+        const rects = layout.blocks
+            .filter((block) => selectedSet.has(block.id))
+            .map((block) => ({ x: block.x, y: block.y, w: block.w, h: block.h }));
+        return getBounds(rects);
+    }, [layout.blocks, selectedBlockIds]);
 
     const safeArea = useMemo(
         () =>
@@ -144,19 +167,19 @@ export function PageCanvasStage({
 
     const applySelection = useCallback(
         (nextIds: string[], primaryId?: string | null) => {
-            setSelectedBlockIds(nextIds);
+            const nextPrimary =
+                nextIds.length === 0
+                    ? null
+                    : primaryId && nextIds.includes(primaryId)
+                        ? primaryId
+                        : (nextIds[nextIds.length - 1] ?? null);
 
-            if (nextIds.length === 0) {
-                setSelectedBlockId(null);
-                return;
-            }
-
-            if (primaryId && nextIds.includes(primaryId)) {
-                setSelectedBlockId(primaryId);
-                return;
-            }
-
-            setSelectedBlockId(nextIds[nextIds.length - 1] ?? null);
+            setSelectedBlockIds((prev) =>
+                areIdListsEqual(prev, nextIds) ? prev : nextIds,
+            );
+            setSelectedBlockId((prev) =>
+                prev === nextPrimary ? prev : nextPrimary,
+            );
         },
         [setSelectedBlockId, setSelectedBlockIds],
     );
@@ -167,12 +190,21 @@ export function PageCanvasStage({
         const primaryStillValid =
             selectedBlockId !== null && available.has(selectedBlockId);
 
-        const selectionChanged = nextIds.length !== selectedBlockIds.length;
-        if (!selectionChanged && primaryStillValid) {
+        const nextPrimary =
+            nextIds.length === 0
+                ? null
+                : primaryStillValid
+                    ? selectedBlockId
+                    : (nextIds[nextIds.length - 1] ?? null);
+
+        const selectionChanged =
+            !areIdListsEqual(nextIds, selectedBlockIds)
+            || selectedBlockId !== nextPrimary;
+        if (!selectionChanged) {
             return;
         }
 
-        applySelection(nextIds, primaryStillValid ? selectedBlockId : null);
+        applySelection(nextIds, nextPrimary);
     }, [applySelection, layout.blocks, selectedBlockId, selectedBlockIds]);
 
     const addBlock = useCallback(
@@ -194,6 +226,7 @@ export function PageCanvasStage({
                     y: 0.05,
                     w: 0.4,
                     h: 0.15,
+                    aspectRatio: 0.4 / 0.15,
                     zIndex: maxZ + 1,
                     content: "Teks baru",
                     style: {
@@ -213,6 +246,7 @@ export function PageCanvasStage({
                     y: 0.05,
                     w: 0.4,
                     h: 0.3,
+                    aspectRatio: 0.4 / 0.3,
                     zIndex: maxZ + 1,
                     assetPath: "",
                     objectFit: "cover",
@@ -226,6 +260,7 @@ export function PageCanvasStage({
                     y: 0.35,
                     w: 0.3,
                     h: 0.3,
+                    aspectRatio: 1,
                     zIndex: maxZ + 1,
                     assetPath: book2ProfileImageUrl ?? "",
                     objectFit: "cover",
@@ -239,6 +274,7 @@ export function PageCanvasStage({
                     y: 0.05,
                     w: 0.2,
                     h: 0.2,
+                    aspectRatio: 1,
                     zIndex: maxZ + 1,
                     objectFit: "contain",
                     svgCode:
@@ -455,18 +491,34 @@ export function PageCanvasStage({
                     safeArea.w > 0 ? (e.clientX - resizing.startX) / safeArea.w : 0;
                 const rawDy =
                     safeArea.h > 0 ? (e.clientY - resizing.startY) / safeArea.h : 0;
-                const nextGroupW = clamp(
-                    resizing.bounds.w + rawDx,
-                    MIN_BLOCK_SIZE,
-                    1 - resizing.bounds.x,
-                );
-                const nextGroupH = clamp(
-                    resizing.bounds.h + rawDy,
-                    MIN_BLOCK_SIZE,
-                    1 - resizing.bounds.y,
-                );
-                const scaleX = resizing.bounds.w > 0 ? nextGroupW / resizing.bounds.w : 1;
-                const scaleY = resizing.bounds.h > 0 ? nextGroupH / resizing.bounds.h : 1;
+                const scaleByX =
+                    resizing.bounds.w > 0
+                        ? (resizing.bounds.w + rawDx) / resizing.bounds.w
+                        : 1;
+                const scaleByY =
+                    resizing.bounds.h > 0
+                        ? (resizing.bounds.h + rawDy) / resizing.bounds.h
+                        : 1;
+                const desiredScale =
+                    Math.abs(scaleByX - 1) >= Math.abs(scaleByY - 1)
+                        ? scaleByX
+                        : scaleByY;
+                const maxScaleByX =
+                    resizing.bounds.w > 0
+                        ? (1 - resizing.bounds.x) / resizing.bounds.w
+                        : 1;
+                const maxScaleByY =
+                    resizing.bounds.h > 0
+                        ? (1 - resizing.bounds.y) / resizing.bounds.h
+                        : 1;
+                const maxScale = Math.min(maxScaleByX, maxScaleByY);
+                const minScaleByW =
+                    resizing.bounds.w > 0 ? MIN_BLOCK_SIZE / resizing.bounds.w : 1;
+                const minScaleByH =
+                    resizing.bounds.h > 0 ? MIN_BLOCK_SIZE / resizing.bounds.h : 1;
+                const minScale = Math.max(minScaleByW, minScaleByH);
+                const safeMinScale = Math.min(minScale, maxScale);
+                const uniformScale = clamp(desiredScale, safeMinScale, maxScale);
                 const activeIds = new Set(resizing.blockIds);
 
                 onLayoutChange((prev) => ({
@@ -481,17 +533,17 @@ export function PageCanvasStage({
                         }
 
                         const nextX = clamp(
-                            resizing.bounds.x + (origin.x - resizing.bounds.x) * scaleX,
+                            resizing.bounds.x + (origin.x - resizing.bounds.x) * uniformScale,
                             0,
                             1,
                         );
                         const nextY = clamp(
-                            resizing.bounds.y + (origin.y - resizing.bounds.y) * scaleY,
+                            resizing.bounds.y + (origin.y - resizing.bounds.y) * uniformScale,
                             0,
                             1,
                         );
-                        const scaledW = origin.w * scaleX;
-                        const scaledH = origin.h * scaleY;
+                        const scaledW = origin.w * uniformScale;
+                        const scaledH = origin.h * uniformScale;
                         const maxW = Math.max(0.001, 1 - nextX);
                         const maxH = Math.max(0.001, 1 - nextY);
 
@@ -501,6 +553,7 @@ export function PageCanvasStage({
                             y: nextY,
                             w: Math.min(maxW, Math.max(MIN_BLOCK_SIZE, scaledW)),
                             h: Math.min(maxH, Math.max(MIN_BLOCK_SIZE, scaledH)),
+                            aspectRatio: getBlockAspectRatio(block),
                         };
                     }),
                 }));
@@ -560,6 +613,51 @@ export function PageCanvasStage({
             selectedBlockIdSet,
             selectedBlockIds,
         ],
+    );
+
+    const handleGroupResizePointerDown = useCallback(
+        (e: React.PointerEvent) => {
+            if (selectedBlockIds.length <= 1) {
+                return;
+            }
+
+            e.stopPropagation();
+            e.preventDefault();
+
+            const activeIds = selectedBlockIds;
+            const selectedSet = new Set(activeIds);
+            const origins: Record<string, BlockRect> = {};
+            const rects: BlockRect[] = [];
+
+            for (const selectedBlock of layout.blocks) {
+                if (!selectedSet.has(selectedBlock.id)) {
+                    continue;
+                }
+                const rect = {
+                    x: selectedBlock.x,
+                    y: selectedBlock.y,
+                    w: selectedBlock.w,
+                    h: selectedBlock.h,
+                };
+                origins[selectedBlock.id] = rect;
+                rects.push(rect);
+            }
+
+            const bounds = getBounds(rects);
+            if (!bounds) {
+                return;
+            }
+
+            setResizing({
+                blockIds: activeIds,
+                startX: e.clientX,
+                startY: e.clientY,
+                origins,
+                bounds,
+            });
+            (e.target as HTMLElement).setPointerCapture(e.pointerId);
+        },
+        [layout.blocks, selectedBlockIds],
     );
 
     const sortedBlocks = [...layout.blocks].sort((a, b) => a.zIndex - b.zIndex);
@@ -751,7 +849,7 @@ export function PageCanvasStage({
                                 </div>
                             )}
 
-                            {isPrimarySelection && (
+                            {isPrimarySelection && !multiSelectedBounds && (
                                 <div
                                     className="absolute -bottom-1 -right-1 h-3 w-3 cursor-se-resize rounded-full border-2 border-neutral-900 bg-amber-400"
                                     onPointerDown={(e) => handleResizePointerDown(e, block)}
@@ -761,6 +859,34 @@ export function PageCanvasStage({
                         </div>
                     );
                 })}
+
+                {multiSelectedBounds && (
+                    <>
+                        <div
+                            className="pointer-events-none absolute ring-2 ring-sky-300/90"
+                            style={{
+                                left: safeArea.x + multiSelectedBounds.x * safeArea.w,
+                                top: safeArea.y + multiSelectedBounds.y * safeArea.h,
+                                width: multiSelectedBounds.w * safeArea.w,
+                                height: multiSelectedBounds.h * safeArea.h,
+                                zIndex: 9998,
+                            }}
+                        />
+                        <div
+                            className="absolute h-3 w-3 cursor-se-resize rounded-full border-2 border-neutral-900 bg-sky-300"
+                            style={{
+                                left:
+                                    safeArea.x + (multiSelectedBounds.x + multiSelectedBounds.w) * safeArea.w,
+                                top:
+                                    safeArea.y + (multiSelectedBounds.y + multiSelectedBounds.h) * safeArea.h,
+                                transform: "translate(-50%, -50%)",
+                                zIndex: 9999,
+                            }}
+                            onPointerDown={handleGroupResizePointerDown}
+                            onClick={(e) => e.stopPropagation()}
+                        />
+                    </>
+                )}
             </div>
         </div>
     );

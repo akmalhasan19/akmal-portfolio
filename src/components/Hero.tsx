@@ -1528,6 +1528,20 @@ export default function Hero() {
 
 
   const [spotlightBook, setSpotlightBook] = useState<BookId>('book1');
+  const setBook1Page = useSetAtom(bookAtom);
+  const setBook2Page = useSetAtom(book2Atom);
+  const setBook3Page = useSetAtom(book3Atom);
+  const setBook4Page = useSetAtom(book4Atom);
+  const setBook5Page = useSetAtom(book5Atom);
+
+  // Ensure all books start closed on each Hero mount.
+  useLayoutEffect(() => {
+    setBook1Page(0);
+    setBook2Page(0);
+    setBook3Page(0);
+    setBook4Page(0);
+    setBook5Page(0);
+  }, [setBook1Page, setBook2Page, setBook3Page, setBook4Page, setBook5Page]);
 
   // Get current page of the spotlight book to hide back button when page is flipped
   const activeBookAtom = useMemo(() => {

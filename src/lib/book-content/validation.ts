@@ -7,6 +7,7 @@ import type {
 import { sanitizeLinkLabel, sanitizeLinkUrl } from "./links";
 import { normalizePaperBackground } from "./paper-tone";
 import { sanitizeSvgCode } from "./svg-utils";
+import { normalizeAspectRatio, parseSvgAspectRatio } from "./aspect-ratio";
 
 const MAX_BLOCKS_PER_SIDE = 20;
 const MIN_FONT_SIZE = 8;
@@ -38,7 +39,14 @@ export function clampNormalizedRect(block: LayoutBlock): LayoutBlock {
     const y = clamp(toFiniteNumber(block.y), 0, 1);
     const w = clamp(toFiniteNumber(block.w, 0.01), 0.01, 1 - x);
     const h = clamp(toFiniteNumber(block.h, 0.01), 0.01, 1 - y);
-    return { ...block, x, y, w, h };
+    return {
+        ...block,
+        x,
+        y,
+        w,
+        h,
+        aspectRatio: normalizeAspectRatio((block as { aspectRatio?: number }).aspectRatio, w / h),
+    };
 }
 
 export function validateTextStyle(
@@ -158,10 +166,13 @@ export function validateLayout(layout: PageSideLayout): ValidationResult {
         }
 
         if (clamped.type === "svg") {
+            const sanitizedSvgCode = sanitizeSvgCode(clamped.svgCode);
+            const svgAspectRatio = parseSvgAspectRatio(sanitizedSvgCode);
             validatedBlocks.push({
                 ...clamped,
-                svgCode: sanitizeSvgCode(clamped.svgCode),
+                svgCode: sanitizedSvgCode,
                 objectFit: clamped.objectFit === "contain" ? "contain" : "cover",
+                aspectRatio: normalizeAspectRatio(svgAspectRatio, clamped.w / clamped.h),
                 linkUrl: validateBlockLinkUrl(clamped.linkUrl),
             });
             continue;

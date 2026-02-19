@@ -64,6 +64,8 @@ interface BlockBase {
     y: number;
     w: number;
     h: number;
+    /** Width/height ratio used to keep resize proportional. */
+    aspectRatio?: number;
     /** Z-order within the page-side. Higher = on top. */
     zIndex: number;
     /** Optional URL opened when this block is clicked in 3D view. */

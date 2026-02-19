@@ -1,13 +1,23 @@
 "use client";
 
 import { useAtom, useAtomValue } from "jotai";
-import { nudgeStepAtom, selectedBlockIdAtom } from "@/lib/book-content/editor-atoms-book2";
+import {
+    nudgeStepAtom,
+    selectedBlockIdAtom,
+    selectedBlockIdsAtom,
+} from "@/lib/book-content/editor-atoms-book2";
 import type {
+    LayoutBlock,
     PageSideLayout,
     TextBlock,
 } from "@/types/book-content";
 import { ImageUploadField } from "./ImageUploadField";
 import { normalizePaperBackground } from "@/lib/book-content/paper-tone";
+import {
+    getBlockAspectRatio,
+    getImageAspectRatio,
+    parseSvgAspectRatio,
+} from "@/lib/book-content/aspect-ratio";
 
 interface BlockInspectorProps {
     layout: PageSideLayout;
@@ -22,13 +32,44 @@ function clamp(value: number, min: number, max: number): number {
     return Math.min(max, Math.max(min, value));
 }
 
+function getBounds(blocks: LayoutBlock[]) {
+    if (blocks.length === 0) {
+        return null;
+    }
+
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+
+    for (const block of blocks) {
+        minX = Math.min(minX, block.x);
+        minY = Math.min(minY, block.y);
+        maxX = Math.max(maxX, block.x + block.w);
+        maxY = Math.max(maxY, block.y + block.h);
+    }
+
+    return {
+        x: minX,
+        y: minY,
+        w: maxX - minX,
+        h: maxY - minY,
+    };
+}
+
 export function BlockInspector({
     layout,
     onLayoutChange,
 }: BlockInspectorProps) {
     const [moveStep, setMoveStep] = useAtom(nudgeStepAtom);
+    const selectedBlockIds = useAtomValue(selectedBlockIdsAtom);
     const selectedBlockId = useAtomValue(selectedBlockIdAtom);
-    const selectedBlock = layout.blocks.find((b) => b.id === selectedBlockId);
+    const selectedBlocks = layout.blocks.filter((b) => selectedBlockIds.includes(b.id));
+    const isGroupSelection = selectedBlocks.length > 1;
+    const groupBounds = isGroupSelection ? getBounds(selectedBlocks) : null;
+    const selectedBlock = isGroupSelection
+        ? null
+        : selectedBlocks[0] ?? layout.blocks.find((b) => b.id === selectedBlockId);
 
     const updateBlock = (blockId: string, updates: Record<string, unknown>) => {
         onLayoutChange((prev) => ({
@@ -76,7 +117,139 @@ export function BlockInspector({
         }));
     };
 
-    if (!selectedBlock) {
+    const moveSelectedBlocks = (
+        deltaX: number,
+        deltaY: number,
+    ) => {
+        if (selectedBlocks.length === 0) {
+            return;
+        }
+
+        const selectedSet = new Set(selectedBlocks.map((b) => b.id));
+        onLayoutChange((prev) => {
+            const blocks = prev.blocks.filter((b) => selectedSet.has(b.id));
+            if (blocks.length === 0) {
+                return prev;
+            }
+
+            let minDx = Number.NEGATIVE_INFINITY;
+            let maxDx = Number.POSITIVE_INFINITY;
+            let minDy = Number.NEGATIVE_INFINITY;
+            let maxDy = Number.POSITIVE_INFINITY;
+            for (const block of blocks) {
+                minDx = Math.max(minDx, -block.x);
+                maxDx = Math.min(maxDx, 1 - block.w - block.x);
+                minDy = Math.max(minDy, -block.y);
+                maxDy = Math.min(maxDy, 1 - block.h - block.y);
+            }
+
+            const appliedDx = clamp(deltaX, minDx, maxDx);
+            const appliedDy = clamp(deltaY, minDy, maxDy);
+            if (appliedDx === 0 && appliedDy === 0) {
+                return prev;
+            }
+
+            return {
+                ...prev,
+                blocks: prev.blocks.map((block) =>
+                    selectedSet.has(block.id)
+                        ? {
+                            ...block,
+                            x: block.x + appliedDx,
+                            y: block.y + appliedDy,
+                        }
+                        : block,
+                ),
+            };
+        });
+    };
+
+    const resizeGroup = (
+        options: { w?: number; h?: number; x?: number; y?: number },
+    ) => {
+        if (!groupBounds || selectedBlocks.length === 0) {
+            return;
+        }
+
+        const selectedSet = new Set(selectedBlocks.map((b) => b.id));
+        const hasPositionChange = options.x !== undefined || options.y !== undefined;
+        const hasSizeChange = options.w !== undefined || options.h !== undefined;
+
+        if (hasPositionChange && !hasSizeChange) {
+            const targetX = options.x !== undefined
+                ? clamp(options.x, 0, 1 - groupBounds.w)
+                : groupBounds.x;
+            const targetY = options.y !== undefined
+                ? clamp(options.y, 0, 1 - groupBounds.h)
+                : groupBounds.y;
+            const deltaX = targetX - groupBounds.x;
+            const deltaY = targetY - groupBounds.y;
+
+            if (deltaX === 0 && deltaY === 0) {
+                return;
+            }
+
+            onLayoutChange((prev) => ({
+                ...prev,
+                blocks: prev.blocks.map((block) =>
+                    selectedSet.has(block.id)
+                        ? {
+                            ...block,
+                            x: clamp(block.x + deltaX, 0, 1 - block.w),
+                            y: clamp(block.y + deltaY, 0, 1 - block.h),
+                        }
+                        : block,
+                ),
+            }));
+            return;
+        }
+
+        let desiredScale = 1;
+        if (options.w !== undefined && groupBounds.w > 0) {
+            const safeW = clamp(options.w, 0.01, 1 - groupBounds.x);
+            desiredScale = safeW / groupBounds.w;
+        } else if (options.h !== undefined && groupBounds.h > 0) {
+            const safeH = clamp(options.h, 0.01, 1 - groupBounds.y);
+            desiredScale = safeH / groupBounds.h;
+        }
+
+        const maxScale = Math.min(
+            groupBounds.w > 0 ? (1 - groupBounds.x) / groupBounds.w : 1,
+            groupBounds.h > 0 ? (1 - groupBounds.y) / groupBounds.h : 1,
+        );
+        const minScale = Math.max(
+            groupBounds.w > 0 ? 0.01 / groupBounds.w : 1,
+            groupBounds.h > 0 ? 0.01 / groupBounds.h : 1,
+        );
+        const safeMinScale = Math.min(minScale, maxScale);
+        const uniformScale = clamp(desiredScale, safeMinScale, maxScale);
+
+        onLayoutChange((prev) => ({
+            ...prev,
+            blocks: prev.blocks.map((block) => {
+                if (!selectedSet.has(block.id)) {
+                    return block;
+                }
+
+                const nextX =
+                    groupBounds.x + (block.x - groupBounds.x) * uniformScale;
+                const nextY =
+                    groupBounds.y + (block.y - groupBounds.y) * uniformScale;
+                const nextW = block.w * uniformScale;
+                const nextH = block.h * uniformScale;
+
+                return {
+                    ...block,
+                    x: clamp(nextX, 0, 1),
+                    y: clamp(nextY, 0, 1),
+                    w: clamp(nextW, 0.01, 1 - clamp(nextX, 0, 1)),
+                    h: clamp(nextH, 0.01, 1 - clamp(nextY, 0, 1)),
+                };
+            }),
+        }));
+    };
+
+    if (!selectedBlock && !isGroupSelection) {
         return (
             <div className="p-4">
                 <p className="text-xs text-neutral-500">
@@ -107,6 +280,129 @@ export function BlockInspector({
                 </div>
             </div>
         );
+    }
+
+    if (isGroupSelection && groupBounds) {
+        const canMoveLeft = groupBounds.x > 0;
+        const canMoveRight = groupBounds.x < 1 - groupBounds.w;
+        const canMoveUp = groupBounds.y > 0;
+        const canMoveDown = groupBounds.y < 1 - groupBounds.h;
+
+        return (
+            <div className="p-4 space-y-4">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-neutral-400">
+                    Grup Blok ({selectedBlocks.length})
+                </h3>
+
+                <div className="space-y-2">
+                    <label className="text-xs text-neutral-500">Posisi & Ukuran Grup</label>
+                    <div className="grid grid-cols-2 gap-2">
+                        {(["x", "y", "w", "h"] as const).map((prop) => (
+                            <div key={prop} className="space-y-0.5">
+                                <label className="text-[10px] uppercase text-neutral-600">
+                                    {prop}
+                                </label>
+                                <input
+                                    type="number"
+                                    step="0.01"
+                                    min="0"
+                                    max="1"
+                                    value={groupBounds[prop]}
+                                    onChange={(e) => {
+                                        const parsed = parseFloat(e.target.value) || 0;
+                                        if (prop === "x") {
+                                            resizeGroup({ x: clamp(parsed, 0, 1 - groupBounds.w) });
+                                        } else if (prop === "y") {
+                                            resizeGroup({ y: clamp(parsed, 0, 1 - groupBounds.h) });
+                                        } else if (prop === "w") {
+                                            resizeGroup({ w: clamp(parsed, 0.01, 1 - groupBounds.x) });
+                                        } else {
+                                            resizeGroup({ h: clamp(parsed, 0.01, 1 - groupBounds.y) });
+                                        }
+                                    }}
+                                    className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs outline-none focus:border-amber-500"
+                                />
+                            </div>
+                        ))}
+                    </div>
+
+                    <div className="space-y-2 rounded border border-neutral-800 bg-neutral-900/50 p-2">
+                        <div className="flex items-center justify-between gap-2">
+                            <label className="text-[10px] uppercase text-neutral-600">
+                                Step Geser
+                            </label>
+                            <input
+                                type="number"
+                                min={MIN_MOVE_STEP}
+                                max={MAX_MOVE_STEP}
+                                step="0.001"
+                                value={moveStep}
+                                onChange={(e) => {
+                                    const parsed = parseFloat(e.target.value);
+                                    if (!Number.isFinite(parsed)) {
+                                        setMoveStep(DEFAULT_MOVE_STEP);
+                                        return;
+                                    }
+                                    setMoveStep(clamp(parsed, MIN_MOVE_STEP, MAX_MOVE_STEP));
+                                }}
+                                className="w-24 rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs outline-none focus:border-amber-500"
+                            />
+                        </div>
+
+                        <div className="mx-auto grid w-24 grid-cols-3 gap-1">
+                            <span />
+                            <button
+                                type="button"
+                                onClick={() => moveSelectedBlocks(0, -moveStep)}
+                                disabled={!canMoveUp}
+                                className="rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs transition-colors hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                                &uarr;
+                            </button>
+                            <span />
+                            <button
+                                type="button"
+                                onClick={() => moveSelectedBlocks(-moveStep, 0)}
+                                disabled={!canMoveLeft}
+                                className="rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs transition-colors hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                                &larr;
+                            </button>
+                            <span className="rounded border border-neutral-800 bg-neutral-900/70 px-2 py-1 text-center text-[10px] text-neutral-500">
+                                XY
+                            </span>
+                            <button
+                                type="button"
+                                onClick={() => moveSelectedBlocks(moveStep, 0)}
+                                disabled={!canMoveRight}
+                                className="rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs transition-colors hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                                &rarr;
+                            </button>
+                            <span />
+                            <button
+                                type="button"
+                                onClick={() => moveSelectedBlocks(0, moveStep)}
+                                disabled={!canMoveDown}
+                                className="rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs transition-colors hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                                &darr;
+                            </button>
+                            <span />
+                        </div>
+                    </div>
+                </div>
+
+                <p className="text-xs text-neutral-500">
+                    Mode grup aktif. Semua blok diperlakukan sebagai satu block virtual
+                    sampai seleksi grup dibatalkan.
+                </p>
+            </div>
+        );
+    }
+
+    if (!selectedBlock) {
+        return null;
     }
 
     const canMoveLeft = selectedBlock.x > 0;
@@ -141,11 +437,53 @@ export function BlockInspector({
                                 min="0"
                                 max="1"
                                 value={selectedBlock[prop]}
-                                onChange={(e) =>
+                                onChange={(e) => {
+                                    const parsed = parseFloat(e.target.value) || 0;
+                                    const ratio = getBlockAspectRatio(selectedBlock);
+
+                                    if (prop === "x") {
+                                        updateBlock(selectedBlock.id, {
+                                            x: clamp(parsed, 0, 1 - selectedBlock.w),
+                                        });
+                                        return;
+                                    }
+
+                                    if (prop === "y") {
+                                        updateBlock(selectedBlock.id, {
+                                            y: clamp(parsed, 0, 1 - selectedBlock.h),
+                                        });
+                                        return;
+                                    }
+
+                                    if (prop === "w") {
+                                        let nextW = clamp(parsed, 0.01, 1 - selectedBlock.x);
+                                        let nextH = nextW / ratio;
+                                        const maxH = 1 - selectedBlock.y;
+                                        if (nextH > maxH) {
+                                            nextH = maxH;
+                                            nextW = nextH * ratio;
+                                        }
+                                        updateBlock(selectedBlock.id, {
+                                            w: clamp(nextW, 0.01, 1 - selectedBlock.x),
+                                            h: clamp(nextH, 0.01, 1 - selectedBlock.y),
+                                            aspectRatio: ratio,
+                                        });
+                                        return;
+                                    }
+
+                                    let nextH = clamp(parsed, 0.01, 1 - selectedBlock.y);
+                                    let nextW = nextH * ratio;
+                                    const maxW = 1 - selectedBlock.x;
+                                    if (nextW > maxW) {
+                                        nextW = maxW;
+                                        nextH = nextW / ratio;
+                                    }
                                     updateBlock(selectedBlock.id, {
-                                        [prop]: parseFloat(e.target.value) || 0,
-                                    })
-                                }
+                                        w: clamp(nextW, 0.01, 1 - selectedBlock.x),
+                                        h: clamp(nextH, 0.01, 1 - selectedBlock.y),
+                                        aspectRatio: ratio,
+                                    });
+                                }}
                                 className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs outline-none focus:border-amber-500"
                             />
                         </div>
@@ -407,9 +745,28 @@ export function BlockInspector({
                     <ImageUploadField
                         blockId={selectedBlock.id}
                         currentAssetPath={selectedBlock.assetPath}
-                        onAssetUploaded={(url: string) =>
-                            updateBlock(selectedBlock.id, { assetPath: url })
-                        }
+                        onAssetUploaded={async (url: string) => {
+                            const ratio = await getImageAspectRatio(url);
+                            const targetRatio = selectedBlock.type === "image" && selectedBlock.shape === "circle"
+                                ? 1
+                                : (ratio ?? getBlockAspectRatio(selectedBlock));
+                            let nextW = selectedBlock.w;
+                            let nextH = nextW / targetRatio;
+                            if (nextH > 1 - selectedBlock.y) {
+                                nextH = 1 - selectedBlock.y;
+                                nextW = nextH * targetRatio;
+                            }
+                            if (nextW > 1 - selectedBlock.x) {
+                                nextW = 1 - selectedBlock.x;
+                                nextH = nextW / targetRatio;
+                            }
+                            updateBlock(selectedBlock.id, {
+                                assetPath: url,
+                                aspectRatio: targetRatio,
+                                w: clamp(nextW, 0.01, 1 - selectedBlock.x),
+                                h: clamp(nextH, 0.01, 1 - selectedBlock.y),
+                            });
+                        }}
                     />
 
                     <div className="space-y-0.5">
@@ -441,9 +798,26 @@ export function BlockInspector({
                         </label>
                         <textarea
                             value={selectedBlock.svgCode}
-                            onChange={(e) =>
-                                updateBlock(selectedBlock.id, { svgCode: e.target.value })
-                            }
+                            onChange={(e) => {
+                                const svgCode = e.target.value;
+                                const svgRatio = parseSvgAspectRatio(svgCode) ?? getBlockAspectRatio(selectedBlock);
+                                let nextW = selectedBlock.w;
+                                let nextH = nextW / svgRatio;
+                                if (nextH > 1 - selectedBlock.y) {
+                                    nextH = 1 - selectedBlock.y;
+                                    nextW = nextH * svgRatio;
+                                }
+                                if (nextW > 1 - selectedBlock.x) {
+                                    nextW = 1 - selectedBlock.x;
+                                    nextH = nextW / svgRatio;
+                                }
+                                updateBlock(selectedBlock.id, {
+                                    svgCode,
+                                    aspectRatio: svgRatio,
+                                    w: clamp(nextW, 0.01, 1 - selectedBlock.x),
+                                    h: clamp(nextH, 0.01, 1 - selectedBlock.y),
+                                });
+                            }}
                             rows={8}
                             className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1.5 text-xs font-mono outline-none focus:border-amber-500 resize-y"
                             placeholder='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">...</svg>'
