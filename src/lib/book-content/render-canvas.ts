@@ -5,7 +5,8 @@ import { normalizePaperBackground } from "./paper-tone";
 
 // ── Constants ────────────────────────────────
 
-export const CANVAS_RENDERER_VERSION = "3";
+export const CANVAS_RENDERER_VERSION = "4";
+export const BASE_CANVAS_HEIGHT = 1536;
 const DEFAULT_BG_COLOR = normalizePaperBackground();
 const MAX_IMAGE_CACHE_ENTRIES = 96;
 const resolvedFontFamilyCache = new Map<string, string>();
@@ -108,6 +109,7 @@ function drawTextBlock(
     safeY: number,
     safeW: number,
     safeH: number,
+    fontScale: number,
 ) {
     const x = safeX + block.x * safeW;
     const y = safeY + block.y * safeH;
@@ -123,11 +125,12 @@ function drawTextBlock(
     ctx.rect(x, y, w, h);
     ctx.clip();
 
-    ctx.font = `${fontWeight} ${fontSize}px ${resolvedFontFamily}`;
+    const effectiveFontSize = Math.max(1, fontSize * fontScale);
+    ctx.font = `${fontWeight} ${effectiveFontSize}px ${resolvedFontFamily}`;
     ctx.fillStyle = color;
     ctx.textBaseline = "top";
 
-    const linePixelHeight = fontSize * lineHeight;
+    const linePixelHeight = effectiveFontSize * lineHeight;
     const wrappedLines = wrapText(ctx, block.content, w);
 
     for (let i = 0; i < wrappedLines.length; i++) {
@@ -286,7 +289,17 @@ export async function renderPageSideToCanvas(
     ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
     // 2. Compute safe area
-    const safe = computeSafeArea(canvasWidth, canvasHeight, layout.paddingOverride);
+    const scaleY = canvasHeight / BASE_CANVAS_HEIGHT;
+    const baseCanvasWidth = canvasWidth / scaleY;
+    const scaleX = canvasWidth / baseCanvasWidth;
+
+    const baseSafe = computeSafeArea(baseCanvasWidth, BASE_CANVAS_HEIGHT, layout.paddingOverride);
+    const safe = {
+        x: baseSafe.x * scaleX,
+        y: baseSafe.y * scaleY,
+        w: baseSafe.w * scaleX,
+        h: baseSafe.h * scaleY
+    };
 
     // 3. Sort blocks by z-index
     const sortedBlocks = [...layout.blocks].sort((a, b) => a.zIndex - b.zIndex);
@@ -329,7 +342,7 @@ export async function renderPageSideToCanvas(
     // 5. Draw each block
     for (const block of sortedBlocks) {
         if (block.type === "text") {
-            drawTextBlock(ctx, block, safe.x, safe.y, safe.w, safe.h);
+            drawTextBlock(ctx, block, safe.x, safe.y, safe.w, safe.h, scaleY);
         } else if (block.type === "image") {
             const img = loadedImages.get(block.id);
             if (img) {

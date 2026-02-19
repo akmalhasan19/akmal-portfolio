@@ -1,6 +1,7 @@
+/* eslint-disable react-hooks/immutability */
 import { useTexture } from "@react-three/drei/core/Texture";
 import { useCursor } from "@react-three/drei/web/useCursor";
-import { ThreeElements, useFrame } from "@react-three/fiber";
+import { ThreeElements, useFrame, useThree } from "@react-three/fiber";
 import { atom, useAtom, useSetAtom, type PrimitiveAtom } from "jotai";
 import { easing } from "maath";
 import { useEffect, useMemo, useRef, useState, memo } from "react";
@@ -506,6 +507,20 @@ const Page = ({
     ...(activeCoverBackTexturePath ? [activeCoverBackTexturePath] : []),
     ...(activeCoverAvatarPath ? [activeCoverAvatarPath] : []),
   ];
+
+  const gl = useThree((state) => state.gl);
+  const anisotropy = useMemo(() => Math.min(8, gl.capabilities.getMaxAnisotropy()), [gl]);
+
+  useEffect(() => {
+    if (dynamicFrontTexture) {
+      dynamicFrontTexture.anisotropy = anisotropy;
+      dynamicFrontTexture.needsUpdate = true;
+    }
+    if (dynamicBackTexture) {
+      dynamicBackTexture.anisotropy = anisotropy;
+      dynamicBackTexture.needsUpdate = true;
+    }
+  }, [dynamicFrontTexture, dynamicBackTexture, anisotropy]);
 
   const loadedTextures = useTexture(
     texturePaths,

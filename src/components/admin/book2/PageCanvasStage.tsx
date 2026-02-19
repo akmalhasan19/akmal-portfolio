@@ -15,13 +15,14 @@ import { computeSafeArea } from "@/lib/book-content/padding";
 import { sanitizeSvgCode, svgToDataUrl } from "@/lib/book-content/svg-utils";
 import { normalizePaperBackground } from "@/lib/book-content/paper-tone";
 import { useBookProfileImage } from "@/lib/book-content/useBookProfileImage";
+import { BASE_CANVAS_HEIGHT } from "@/lib/book-content/render-canvas";
 
 // ── Constants ────────────────────────────────
 
 const CANVAS_DISPLAY_WIDTH = 600;
 const PAGE_ASPECT_RATIO = 1.71 / 1.28; // height / width from Book3D defaults
 const CANVAS_DISPLAY_HEIGHT = Math.round(CANVAS_DISPLAY_WIDTH * PAGE_ASPECT_RATIO);
-const REFERENCE_TEXTURE_HEIGHT = 1536;
+const REFERENCE_TEXTURE_HEIGHT = BASE_CANVAS_HEIGHT;
 const REFERENCE_TEXTURE_WIDTH = Math.round(REFERENCE_TEXTURE_HEIGHT * (1.28 / 1.71));
 
 // ── Props ────────────────────────────────────

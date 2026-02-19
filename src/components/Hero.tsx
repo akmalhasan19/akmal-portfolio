@@ -266,6 +266,9 @@ interface SceneProfile {
   bookTextureLoadRadius: number;
 }
 
+const BOOK_DYNAMIC_CANVAS_HEIGHT_MOBILE = 1024;
+const BOOK_DYNAMIC_CANVAS_HEIGHT_DESKTOP = 2048;
+
 const SCENE_PROFILES: Record<SceneProfile["name"], SceneProfile> = {
   mobile: {
     name: "mobile",
@@ -1617,7 +1620,7 @@ export default function Hero() {
   const book1DynamicContent = useBookSideTextures({
     bookKey: "book-1",
     totalPageEntries: book1Pages.length + 2, // interior sheets + 2 covers
-    canvasHeight: isLowEndDevice ? 1024 : 1536,
+    canvasHeight: isLowEndDevice ? BOOK_DYNAMIC_CANVAS_HEIGHT_MOBILE : BOOK_DYNAMIC_CANVAS_HEIGHT_DESKTOP,
     textureLoadRadius: sceneProfile.bookTextureLoadRadius,
     currentPage: currentBook1Page,
     enabled: true,
@@ -1632,6 +1635,7 @@ export default function Hero() {
     currentPage: currentBook2Page,
     enabled: sceneProfile.renderSecondBook,
   });
+
   const book2ProfileImageUrl = useBookProfileImage({
     bookKey: "book-2",
     enabled: sceneProfile.renderSecondBook,

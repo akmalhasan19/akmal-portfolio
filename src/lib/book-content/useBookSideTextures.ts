@@ -30,8 +30,8 @@ interface UseBookSideTexturesOptions {
     enabled?: boolean;
 }
 
-function layoutHash(layout: PageSideLayout): string {
-    return `${CANVAS_RENDERER_VERSION}:${JSON.stringify(layout)}`;
+function layoutHash(layout: PageSideLayout, width: number, height: number): string {
+    return `${CANVAS_RENDERER_VERSION}:${width}x${height}:${JSON.stringify(layout)}`;
 }
 
 function getRetainedPageIndices(
@@ -100,6 +100,8 @@ export function useBookSideTextures({
 
     const canvasWidth = Math.round(canvasHeight * pageAspectRatio);
 
+    const lastResolutionKeyRef = useRef<string>("");
+
     useEffect(() => {
         mountedRef.current = true;
         const textureCache = textureCacheRef.current;
@@ -115,13 +117,28 @@ export function useBookSideTextures({
     }, []);
 
     useEffect(() => {
-        if (!enabled) {
+        const resolutionKey = `${canvasWidth}x${canvasHeight}`;
+        if (lastResolutionKeyRef.current !== resolutionKey) {
+            // Resolution changed, clear cache to force re-render
             for (const texture of textureCacheRef.current.values()) {
                 texture.dispose();
             }
             textureCacheRef.current.clear();
             layoutCacheRef.current.clear();
             setTextures({});
+            lastResolutionKeyRef.current = resolutionKey;
+        }
+
+        if (!enabled) {
+            // If disabled, we still want to keep the cache clear state we just set (or clear it if it wasn't)
+            if (Object.keys(textureCacheRef.current).length > 0) {
+                for (const texture of textureCacheRef.current.values()) {
+                    texture.dispose();
+                }
+                textureCacheRef.current.clear();
+                layoutCacheRef.current.clear();
+                setTextures({});
+            }
             return;
         }
 
@@ -161,7 +178,7 @@ export function useBookSideTextures({
 
                 const key = pageSideKey(row.page_index, row.side);
                 fetchedKeys.add(key);
-                const hash = layoutHash(row.layout);
+                const hash = layoutHash(row.layout, canvasWidth, canvasHeight);
 
                 if (layoutCacheRef.current.get(key) === hash) {
                     continue;
