@@ -1,11 +1,17 @@
-import type { PageSideLayout, ImageBlock, SvgBlock, TextBlock } from "@/types/book-content";
+import type {
+    ImageBlock,
+    LinkBlock,
+    PageSideLayout,
+    SvgBlock,
+    TextBlock,
+} from "@/types/book-content";
 import { computeSafeArea } from "./padding";
 import { svgToDataUrl } from "./svg-utils";
 import { normalizePaperBackground } from "./paper-tone";
 
 // ── Constants ────────────────────────────────
 
-export const CANVAS_RENDERER_VERSION = "4";
+export const CANVAS_RENDERER_VERSION = "5";
 export const BASE_CANVAS_HEIGHT = 1536;
 const DEFAULT_BG_COLOR = normalizePaperBackground();
 const MAX_IMAGE_CACHE_ENTRIES = 96;
@@ -98,6 +104,28 @@ function wrapText(
     }
 
     return lines;
+}
+
+function drawRoundedRectPath(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    radius: number,
+) {
+    const r = Math.max(0, Math.min(radius, Math.min(w, h) * 0.5));
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
 }
 
 // ── Draw functions ───────────────────────────
@@ -260,6 +288,70 @@ function drawVisualBlock(
     ctx.restore();
 }
 
+function drawLinkBlock(
+    ctx: CanvasRenderingContext2D,
+    block: LinkBlock,
+    safeX: number,
+    safeY: number,
+    safeW: number,
+    safeH: number,
+    fontScale: number,
+) {
+    const x = safeX + block.x * safeW;
+    const y = safeY + block.y * safeH;
+    const w = block.w * safeW;
+    const h = block.h * safeH;
+
+    const { backgroundColor, textColor, fontFamily, textAlign, fontSize, fontWeight } =
+        block.style;
+    const radius = block.style.borderRadius * fontScale;
+    const resolvedFontFamily = resolveCanvasFontFamily(fontFamily);
+    const effectiveFontSize = Math.max(1, fontSize * fontScale);
+    const paddingX = Math.max(4, effectiveFontSize * 0.35);
+    const paddingY = Math.max(3, effectiveFontSize * 0.25);
+    const textAreaX = x + paddingX;
+    const textAreaY = y + paddingY;
+    const textAreaW = Math.max(1, w - paddingX * 2);
+    const textAreaH = Math.max(1, h - paddingY * 2);
+
+    ctx.save();
+
+    drawRoundedRectPath(ctx, x, y, w, h, radius);
+    ctx.fillStyle = backgroundColor;
+    ctx.fill();
+
+    drawRoundedRectPath(ctx, x, y, w, h, radius);
+    ctx.clip();
+
+    ctx.font = `${fontWeight} ${effectiveFontSize}px ${resolvedFontFamily}`;
+    ctx.fillStyle = textColor;
+    ctx.textBaseline = "top";
+
+    const lineHeightPx = effectiveFontSize * 1.2;
+    const wrappedLines = wrapText(ctx, block.label, textAreaW);
+    for (let i = 0; i < wrappedLines.length; i += 1) {
+        const lineY = textAreaY + i * lineHeightPx;
+        if (lineY + lineHeightPx > textAreaY + textAreaH) {
+            break;
+        }
+
+        let lineX = textAreaX;
+        if (textAlign === "center") {
+            lineX = textAreaX + textAreaW * 0.5;
+            ctx.textAlign = "center";
+        } else if (textAlign === "right") {
+            lineX = textAreaX + textAreaW;
+            ctx.textAlign = "right";
+        } else {
+            ctx.textAlign = "left";
+        }
+
+        ctx.fillText(wrappedLines[i], lineX, lineY);
+    }
+
+    ctx.restore();
+}
+
 // ── Main render function ─────────────────────
 
 /**
@@ -353,6 +445,8 @@ export async function renderPageSideToCanvas(
             if (img) {
                 drawVisualBlock(ctx, block, img, safe.x, safe.y, safe.w, safe.h);
             }
+        } else if (block.type === "link") {
+            drawLinkBlock(ctx, block, safe.x, safe.y, safe.w, safe.h, scaleY);
         }
     }
 

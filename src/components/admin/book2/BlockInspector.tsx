@@ -1,7 +1,7 @@
 "use client";
 
-import { useAtomValue } from "jotai";
-import { selectedBlockIdAtom } from "@/lib/book-content/editor-atoms-book2";
+import { useAtom, useAtomValue } from "jotai";
+import { nudgeStepAtom, selectedBlockIdAtom } from "@/lib/book-content/editor-atoms-book2";
 import type {
     PageSideLayout,
     TextBlock,
@@ -14,10 +14,19 @@ interface BlockInspectorProps {
     onLayoutChange: (updater: (prev: PageSideLayout) => PageSideLayout) => void;
 }
 
+const DEFAULT_MOVE_STEP = 0.01;
+const MIN_MOVE_STEP = 0.001;
+const MAX_MOVE_STEP = 0.2;
+
+function clamp(value: number, min: number, max: number): number {
+    return Math.min(max, Math.max(min, value));
+}
+
 export function BlockInspector({
     layout,
     onLayoutChange,
 }: BlockInspectorProps) {
+    const [moveStep, setMoveStep] = useAtom(nudgeStepAtom);
     const selectedBlockId = useAtomValue(selectedBlockIdAtom);
     const selectedBlock = layout.blocks.find((b) => b.id === selectedBlockId);
 
@@ -41,6 +50,29 @@ export function BlockInspector({
                     ? { ...b, style: { ...b.style, ...styleUpdates } }
                     : b,
             ),
+        }));
+    };
+
+    const moveBlock = (
+        blockId: string,
+        deltaX: number,
+        deltaY: number,
+    ) => {
+        onLayoutChange((prev) => ({
+            ...prev,
+            blocks: prev.blocks.map((b) => {
+                if (b.id !== blockId) {
+                    return b;
+                }
+
+                const maxX = Math.max(0, 1 - b.w);
+                const maxY = Math.max(0, 1 - b.h);
+                return {
+                    ...b,
+                    x: clamp(b.x + deltaX, 0, maxX),
+                    y: clamp(b.y + deltaY, 0, maxY),
+                };
+            }),
         }));
     };
 
@@ -77,6 +109,11 @@ export function BlockInspector({
         );
     }
 
+    const canMoveLeft = selectedBlock.x > 0;
+    const canMoveRight = selectedBlock.x < 1 - selectedBlock.w;
+    const canMoveUp = selectedBlock.y > 0;
+    const canMoveDown = selectedBlock.y < 1 - selectedBlock.h;
+
     return (
         <div className="p-4 space-y-4">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-neutral-400">
@@ -84,7 +121,9 @@ export function BlockInspector({
                     ? "Blok Teks"
                     : selectedBlock.type === "image"
                         ? "Blok Gambar"
-                        : "Blok SVG"}
+                        : selectedBlock.type === "svg"
+                            ? "Blok SVG"
+                            : "Blok Lainnya"}
             </h3>
 
             {/* Position / Size */}
@@ -112,6 +151,72 @@ export function BlockInspector({
                         </div>
                     ))}
                 </div>
+
+                <div className="space-y-2 rounded border border-neutral-800 bg-neutral-900/50 p-2">
+                    <div className="flex items-center justify-between gap-2">
+                        <label className="text-[10px] uppercase text-neutral-600">
+                            Step Geser
+                        </label>
+                        <input
+                            type="number"
+                            min={MIN_MOVE_STEP}
+                            max={MAX_MOVE_STEP}
+                            step="0.001"
+                            value={moveStep}
+                            onChange={(e) => {
+                                const parsed = parseFloat(e.target.value);
+                                if (!Number.isFinite(parsed)) {
+                                    setMoveStep(DEFAULT_MOVE_STEP);
+                                    return;
+                                }
+                                setMoveStep(clamp(parsed, MIN_MOVE_STEP, MAX_MOVE_STEP));
+                            }}
+                            className="w-24 rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs outline-none focus:border-amber-500"
+                        />
+                    </div>
+
+                    <div className="mx-auto grid w-24 grid-cols-3 gap-1">
+                        <span />
+                        <button
+                            type="button"
+                            onClick={() => moveBlock(selectedBlock.id, 0, -moveStep)}
+                            disabled={!canMoveUp}
+                            className="rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs transition-colors hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                            &uarr;
+                        </button>
+                        <span />
+                        <button
+                            type="button"
+                            onClick={() => moveBlock(selectedBlock.id, -moveStep, 0)}
+                            disabled={!canMoveLeft}
+                            className="rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs transition-colors hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                            &larr;
+                        </button>
+                        <span className="rounded border border-neutral-800 bg-neutral-900/70 px-2 py-1 text-center text-[10px] text-neutral-500">
+                            XY
+                        </span>
+                        <button
+                            type="button"
+                            onClick={() => moveBlock(selectedBlock.id, moveStep, 0)}
+                            disabled={!canMoveRight}
+                            className="rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs transition-colors hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                            &rarr;
+                        </button>
+                        <span />
+                        <button
+                            type="button"
+                            onClick={() => moveBlock(selectedBlock.id, 0, moveStep)}
+                            disabled={!canMoveDown}
+                            className="rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs transition-colors hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                            &darr;
+                        </button>
+                        <span />
+                    </div>
+                </div>
             </div>
 
             {/* Z-Index */}
@@ -127,6 +232,26 @@ export function BlockInspector({
                     }
                     className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs outline-none focus:border-amber-500"
                 />
+            </div>
+
+            <div className="space-y-1">
+                <label className="text-xs text-neutral-500">
+                    Link Blok (Opsional)
+                </label>
+                <input
+                    type="text"
+                    value={selectedBlock.linkUrl ?? ""}
+                    onChange={(e) =>
+                        updateBlock(selectedBlock.id, {
+                            linkUrl: e.target.value,
+                        })
+                    }
+                    placeholder="https://example.com"
+                    className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs outline-none focus:border-sky-500"
+                />
+                <p className="text-[10px] text-neutral-500">
+                    Jika diisi, area blok ini akan bisa diklik pada tampilan 3D.
+                </p>
             </div>
 
             {/* ── Text-specific controls ────────── */}
@@ -347,6 +472,14 @@ export function BlockInspector({
                     </div>
                 </>
             )}
+
+            {selectedBlock.type === "link" && (
+                <p className="text-xs text-neutral-500">
+                    Blok link lama terdeteksi. Gunakan blok teks/gambar/SVG dan isi
+                    Link Blok untuk flow terbaru.
+                </p>
+            )}
+
         </div>
     );
 }

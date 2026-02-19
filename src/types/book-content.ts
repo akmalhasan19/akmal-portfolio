@@ -34,6 +34,23 @@ export interface TextStyleConfig {
     fontFamily: string;
 }
 
+export interface LinkStyleConfig {
+    /** Button background color. */
+    backgroundColor: string;
+    /** Button text color. */
+    textColor: string;
+    /** Font size in px (rendered on texture canvas). */
+    fontSize: number;
+    /** Font family name. */
+    fontFamily: string;
+    /** Corner radius in px. */
+    borderRadius: number;
+    /** Text alignment. */
+    textAlign: "left" | "center" | "right";
+    /** CSS font-weight value (100-900). */
+    fontWeight: number;
+}
+
 // ── Blocks ───────────────────────────────────
 
 interface BlockBase {
@@ -49,6 +66,8 @@ interface BlockBase {
     h: number;
     /** Z-order within the page-side. Higher = on top. */
     zIndex: number;
+    /** Optional URL opened when this block is clicked in 3D view. */
+    linkUrl?: string;
 }
 
 export interface TextBlock extends BlockBase {
@@ -79,13 +98,39 @@ export interface SvgBlock extends BlockBase {
     objectFit: "cover" | "contain";
 }
 
+export interface LinkBlock extends BlockBase {
+    type: "link";
+    /** Label rendered inside the button-like block. */
+    label: string;
+    /** Target URL opened on click. */
+    url: string;
+    style: LinkStyleConfig;
+}
+
 /** Discriminated union of all block types. */
-export type LayoutBlock = TextBlock | ImageBlock | SvgBlock;
+export type LayoutBlock = TextBlock | ImageBlock | SvgBlock | LinkBlock;
+
+export interface LinkHitRegion {
+    /** Normalized x position in full page texture coordinates (0..1). */
+    x: number;
+    /** Normalized y position in full page texture coordinates (0..1). */
+    y: number;
+    /** Normalized width in full page texture coordinates (0..1). */
+    w: number;
+    /** Normalized height in full page texture coordinates (0..1). */
+    h: number;
+    /** Final sanitized URL for click action. */
+    url: string;
+    /** Z-order used to resolve overlap (higher wins). */
+    zIndex: number;
+}
+
+export type LinkRegionMap = Record<string, LinkHitRegion[]>;
 
 // ── Page side layout ─────────────────────────
 
 export interface PageSideLayout {
-    /** All content blocks on this page-side. Max 8. */
+    /** All content blocks on this page-side. Max 20. */
     blocks: LayoutBlock[];
     /** Optional padding override. If omitted, global defaults are used. */
     paddingOverride?: PaddingConfig;

@@ -28,7 +28,7 @@ import { Book3D, createBookAtom } from './Book3D';
 import { useSetAtom, useAtomValue } from 'jotai';
 import { CoffeeSteam } from './CoffeeSteam';
 
-import { useBookSideTextures } from '@/lib/book-content/useBookSideTextures';
+import { useBookSideContent, useBookSideTextures } from '@/lib/book-content/useBookSideTextures';
 import { useBookProfileImage } from '@/lib/book-content/useBookProfileImage';
 import { BOOK2_CENTER_SPREAD_PIVOT } from '@/lib/book-content/book2-constraints';
 
@@ -1071,7 +1071,7 @@ interface InteractiveBooksProps {
   book4Pages: Array<{ front: string; back: string }>;
   book5Pages: Array<{ front: string; back: string }>;
   book1DynamicContent: ReturnType<typeof useBookSideTextures>;
-  book2DynamicContent: ReturnType<typeof useBookSideTextures>;
+  book2DynamicContent: ReturnType<typeof useBookSideContent>;
   book2ProfileImageUrl: string | null;
   bookFocused: boolean;
   portfolioLabel: string;
@@ -1282,7 +1282,8 @@ function InteractiveBooks({
             enableShadows={enableShadows}
             textureLoadRadius={textureLoadRadius}
             contentEnabled={true}
-            dynamicContent={book2DynamicContent}
+            dynamicContent={book2DynamicContent.textures}
+            dynamicLinkRegions={book2DynamicContent.linkRegions}
             frontCoverAvatarUrl={book2ProfileImageUrl ?? undefined}
             largeBookFanSpreadDeg={8}
             onBookClick={() => handleBookClick('book2')}
@@ -1627,7 +1628,7 @@ export default function Hero() {
   });
 
   // Dynamic content for Book 2
-  const book2DynamicContent = useBookSideTextures({
+  const book2DynamicContent = useBookSideContent({
     bookKey: "book-2",
     totalPageEntries: book2Pages.length + 2, // interior sheets + 2 covers
     canvasHeight: isLowEndDevice ? 1024 : 1536,

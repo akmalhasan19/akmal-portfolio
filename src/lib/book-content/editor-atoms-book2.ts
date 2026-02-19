@@ -23,6 +23,8 @@ export const savingAtom = atom(false);
 export const saveErrorAtom = atom<string | null>(null);
 export const loadingAtom = atom(false);
 export const selectedBlockIdAtom = atom<string | null>(null);
+export const selectedBlockIdsAtom = atom<string[]>([]);
+export const nudgeStepAtom = atom(0.01);
 
 // Book 2 total entries: 40 interior sheets + 2 covers.
 export const totalInteriorPagesAtom = atom(BOOK2_TOTAL_PAGE_ENTRIES);

@@ -1,10 +1,10 @@
 /* eslint-disable react-hooks/immutability */
 import { useTexture } from "@react-three/drei/core/Texture";
 import { useCursor } from "@react-three/drei/web/useCursor";
-import { ThreeElements, useFrame, useThree } from "@react-three/fiber";
+import { ThreeElements, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { atom, useAtom, useSetAtom, type PrimitiveAtom } from "jotai";
 import { easing } from "maath";
-import { useEffect, useMemo, useRef, useState, memo } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bone,
   BoxGeometry,
@@ -23,7 +23,9 @@ import {
   Vector3,
 } from "three";
 import { pageSideKey } from "@/types/book-content";
+import { openExternalLink, sanitizeLinkUrl } from "@/lib/book-content/links";
 import type { DynamicTextureMap } from "@/lib/book-content/useBookSideTextures";
+import type { LinkRegionMap } from "@/types/book-content";
 
 const easingFactor = 0.5;
 const easingFactorFold = 0.3;
@@ -434,6 +436,7 @@ interface PageProps extends GroupProps {
   enableShadows: boolean;
   contentEnabled?: boolean;
   dynamicContent?: DynamicTextureMap;
+  dynamicLinkRegions?: LinkRegionMap;
   /** Controls max fan spread for books with >20 page entries. */
   largeBookFanSpreadDeg?: number;
   /** Optional click interceptor from parent scene. Return true to consume click. */
@@ -471,6 +474,7 @@ const Page = ({
   enableShadows,
   contentEnabled,
   dynamicContent,
+  dynamicLinkRegions,
   largeBookFanSpreadDeg,
   onBookClick,
   interactionDisabled = false,
@@ -944,6 +948,57 @@ const Page = ({
     }
   });
 
+  const handleSkinnedMeshClick = useCallback(
+    (event: ThreeEvent<MouseEvent>) => {
+      if (interactionDisabled || !contentEnabled || !dynamicLinkRegions) {
+        return;
+      }
+
+      const uv = event.uv;
+      if (!uv) {
+        return;
+      }
+
+      const materialIndex = event.face?.materialIndex;
+      const side = materialIndex === 4 ? "front" : materialIndex === 5 ? "back" : null;
+      if (!side) {
+        return;
+      }
+
+      const regions = dynamicLinkRegions[pageSideKey(number, side)];
+      if (!regions || regions.length === 0) {
+        return;
+      }
+
+      const hitU = uv.x;
+      const hitV = 1 - uv.y;
+      const hitRegion = regions.find((region) =>
+        hitU >= region.x
+        && hitU <= region.x + region.w
+        && hitV >= region.y
+        && hitV <= region.y + region.h);
+
+      if (!hitRegion) {
+        return;
+      }
+
+      // Consume click so page flip does not trigger when user clicks a linked block.
+      event.stopPropagation();
+      if (!hitRegion.url) {
+        return;
+      }
+
+      const sanitized = sanitizeLinkUrl(hitRegion.url);
+      if (!sanitized) {
+        return;
+      }
+
+      openExternalLink(sanitized);
+      setHighlighted(false);
+    },
+    [contentEnabled, dynamicLinkRegions, interactionDisabled, number],
+  );
+
   return (
     <group
       {...props}
@@ -982,6 +1037,7 @@ const Page = ({
       <primitive
         object={manualSkinnedMesh}
         ref={skinnedMeshRef}
+        onClick={handleSkinnedMeshClick}
         position-x={0}
         position-y={stackSettleY}
         position-z={relativeSheetZ + stackSettleZ + coverSurfaceGuard}
@@ -1024,6 +1080,8 @@ export interface Book3DProps extends GroupProps {
   contentEnabled?: boolean;
   /** Map of page-side keys to CanvasTextures. */
   dynamicContent?: DynamicTextureMap;
+  /** Optional map of clickable link hit regions per page-side key. */
+  dynamicLinkRegions?: LinkRegionMap;
   /** Controls max fan spread for books with >20 page entries. */
   largeBookFanSpreadDeg?: number;
   /** Optional click interceptor from parent scene. Return true to consume click. */
@@ -1059,6 +1117,7 @@ export const Book3D = ({
   enableShadows = true,
   contentEnabled,
   dynamicContent,
+  dynamicLinkRegions,
   largeBookFanSpreadDeg,
   onBookClick,
   interactionDisabled = false,
@@ -1297,6 +1356,7 @@ export const Book3D = ({
               enableShadows={enableShadows}
               contentEnabled={contentEnabled}
               dynamicContent={dynamicContent}
+              dynamicLinkRegions={dynamicLinkRegions}
               largeBookFanSpreadDeg={largeBookFanSpreadDeg}
               onBookClick={onBookClick}
               interactionDisabled={interactionDisabled}

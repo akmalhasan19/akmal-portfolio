@@ -186,10 +186,11 @@ export function Book2PageEditor() {
                 blocks: [],
                 backgroundColor: BOOK_PAPER_TONE,
             };
+            const { layout: validatedFetchedLayout } = validateLayout(fetchedLayoutRaw);
             const fetchedLayout: PageSideLayout = {
-                ...fetchedLayoutRaw,
+                ...validatedFetchedLayout,
                 backgroundColor: normalizePaperBackground(
-                    fetchedLayoutRaw.backgroundColor,
+                    validatedFetchedLayout.backgroundColor,
                 ),
             };
 

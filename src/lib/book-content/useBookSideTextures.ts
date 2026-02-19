@@ -2,32 +2,37 @@
 
 import { useEffect, useRef, useState } from "react";
 import { CanvasTexture, SRGBColorSpace } from "three";
-import {
-    CANVAS_RENDERER_VERSION,
-    renderPageSideToCanvas,
-} from "./render-canvas";
+import type {
+    BookKey,
+    BookPageSideLayoutRow,
+    LinkHitRegion,
+    LinkRegionMap,
+    PageSideLayout,
+} from "@/types/book-content";
 import { pageSideKey } from "@/types/book-content";
-import type { BookKey, PageSideLayout, BookPageSideLayoutRow } from "@/types/book-content";
+import { computeSafeArea } from "./padding";
+import { CANVAS_RENDERER_VERSION, renderPageSideToCanvas } from "./render-canvas";
+import { validateLayout } from "./validation";
 
 export type DynamicTextureMap = Record<string, CanvasTexture>;
 
 interface UseBookSideTexturesOptions {
     bookKey: BookKey;
-    /**
-     * Total number of page entries (including covers) in the activePages array.
-     * This determines which page indices to query.
-     */
     totalPageEntries: number;
-    /** Canvas height for texture resolution. Desktop: 1536, Mobile: 1024. */
     canvasHeight: number;
-    /** Page aspect ratio (width/height). Defaults to 1.28/1.71. */
     pageAspectRatio?: number;
-    /** Only render textures within this radius of the current page. */
     textureLoadRadius?: number;
-    /** Current page index (for radius-based culling). */
     currentPage?: number;
-    /** Whether dynamic content is enabled. */
     enabled?: boolean;
+}
+
+interface UseBookSideContentResult {
+    textures: DynamicTextureMap;
+    linkRegions: LinkRegionMap;
+}
+
+function clamp01(value: number): number {
+    return Math.min(1, Math.max(0, value));
 }
 
 function layoutHash(layout: PageSideLayout, width: number, height: number): string {
@@ -44,7 +49,6 @@ function getRetainedPageIndices(
         return retained;
     }
 
-    // Covers are frequently visible, keep them warm.
     retained.add(0);
     retained.add(totalPageEntries - 1);
 
@@ -79,12 +83,50 @@ function getRetainedTextureKeys(pageIndices: Set<number>): Set<string> {
     return keys;
 }
 
-/**
- * Fetches page-side layouts from Supabase,
- * renders them to CanvasTextures, and returns a map keyed by
- * `p{index}:front` / `p{index}:back`.
- */
-export function useBookSideTextures({
+function buildLinkHitRegions(
+    layout: PageSideLayout,
+    canvasWidth: number,
+    canvasHeight: number,
+): LinkHitRegion[] {
+    if (canvasWidth <= 0 || canvasHeight <= 0) {
+        return [];
+    }
+
+    const safe = computeSafeArea(canvasWidth, canvasHeight, layout.paddingOverride);
+    const regions: LinkHitRegion[] = [];
+
+    for (const block of layout.blocks) {
+        const blockUrl = block.type === "link"
+            ? (block.linkUrl || block.url)
+            : block.linkUrl;
+        if (!blockUrl) {
+            continue;
+        }
+
+        const xPx = safe.x + block.x * safe.w;
+        const yPx = safe.y + block.y * safe.h;
+        const wPx = block.w * safe.w;
+        const hPx = block.h * safe.h;
+        const x = clamp01(xPx / canvasWidth);
+        const y = clamp01(yPx / canvasHeight);
+        const maxX = clamp01((xPx + wPx) / canvasWidth);
+        const maxY = clamp01((yPx + hPx) / canvasHeight);
+
+        regions.push({
+            x,
+            y,
+            w: Math.max(0, maxX - x),
+            h: Math.max(0, maxY - y),
+            url: blockUrl,
+            zIndex: block.zIndex,
+        });
+    }
+
+    regions.sort((a, b) => b.zIndex - a.zIndex);
+    return regions;
+}
+
+export function useBookSideContent({
     bookKey,
     totalPageEntries,
     canvasHeight,
@@ -92,20 +134,23 @@ export function useBookSideTextures({
     textureLoadRadius = Number.POSITIVE_INFINITY,
     currentPage = 0,
     enabled = true,
-}: UseBookSideTexturesOptions): DynamicTextureMap {
+}: UseBookSideTexturesOptions): UseBookSideContentResult {
     const [textures, setTextures] = useState<DynamicTextureMap>({});
+    const [linkRegions, setLinkRegions] = useState<LinkRegionMap>({});
+
     const layoutCacheRef = useRef<Map<string, string>>(new Map());
     const textureCacheRef = useRef<Map<string, CanvasTexture>>(new Map());
+    const linkRegionCacheRef = useRef<Map<string, LinkHitRegion[]>>(new Map());
     const mountedRef = useRef(true);
+    const lastResolutionKeyRef = useRef<string>("");
 
     const canvasWidth = Math.round(canvasHeight * pageAspectRatio);
-
-    const lastResolutionKeyRef = useRef<string>("");
 
     useEffect(() => {
         mountedRef.current = true;
         const textureCache = textureCacheRef.current;
         const layoutCache = layoutCacheRef.current;
+        const regionCache = linkRegionCacheRef.current;
         return () => {
             mountedRef.current = false;
             for (const texture of textureCache.values()) {
@@ -113,31 +158,34 @@ export function useBookSideTextures({
             }
             textureCache.clear();
             layoutCache.clear();
+            regionCache.clear();
         };
     }, []);
 
     useEffect(() => {
         const resolutionKey = `${canvasWidth}x${canvasHeight}`;
         if (lastResolutionKeyRef.current !== resolutionKey) {
-            // Resolution changed, clear cache to force re-render
             for (const texture of textureCacheRef.current.values()) {
                 texture.dispose();
             }
             textureCacheRef.current.clear();
             layoutCacheRef.current.clear();
+            linkRegionCacheRef.current.clear();
             setTextures({});
+            setLinkRegions({});
             lastResolutionKeyRef.current = resolutionKey;
         }
 
         if (!enabled) {
-            // If disabled, we still want to keep the cache clear state we just set (or clear it if it wasn't)
-            if (Object.keys(textureCacheRef.current).length > 0) {
+            if (textureCacheRef.current.size > 0 || linkRegionCacheRef.current.size > 0) {
                 for (const texture of textureCacheRef.current.values()) {
                     texture.dispose();
                 }
                 textureCacheRef.current.clear();
                 layoutCacheRef.current.clear();
+                linkRegionCacheRef.current.clear();
                 setTextures({});
+                setLinkRegions({});
             }
             return;
         }
@@ -178,14 +226,21 @@ export function useBookSideTextures({
 
                 const key = pageSideKey(row.page_index, row.side);
                 fetchedKeys.add(key);
-                const hash = layoutHash(row.layout, canvasWidth, canvasHeight);
+
+                const { layout: validatedLayout } = validateLayout(row.layout);
+                const hash = layoutHash(validatedLayout, canvasWidth, canvasHeight);
+
+                linkRegionCacheRef.current.set(
+                    key,
+                    buildLinkHitRegions(validatedLayout, canvasWidth, canvasHeight),
+                );
 
                 if (layoutCacheRef.current.get(key) === hash) {
                     continue;
                 }
 
                 renderPromises.push(
-                    renderPageSideToCanvas(row.layout, canvasWidth, canvasHeight)
+                    renderPageSideToCanvas(validatedLayout, canvasWidth, canvasHeight)
                         .then((canvas) => {
                             if (cancelled) {
                                 return;
@@ -214,7 +269,6 @@ export function useBookSideTextures({
                 return;
             }
 
-            // Prune textures outside active radius and entries removed from DB.
             for (const [key, texture] of textureCacheRef.current.entries()) {
                 const shouldKeep = retainedKeys.has(key) && fetchedKeys.has(key);
                 if (!shouldKeep) {
@@ -230,12 +284,26 @@ export function useBookSideTextures({
                 }
             }
 
-            if (mountedRef.current) {
-                const merged: DynamicTextureMap = {};
-                for (const [key, texture] of textureCacheRef.current.entries()) {
-                    merged[key] = texture;
+            for (const key of linkRegionCacheRef.current.keys()) {
+                const shouldKeep = retainedKeys.has(key) && fetchedKeys.has(key);
+                if (!shouldKeep) {
+                    linkRegionCacheRef.current.delete(key);
                 }
-                setTextures(merged);
+            }
+
+            if (mountedRef.current) {
+                const nextTextures: DynamicTextureMap = {};
+                for (const [key, texture] of textureCacheRef.current.entries()) {
+                    nextTextures[key] = texture;
+                }
+
+                const nextRegions: LinkRegionMap = {};
+                for (const [key, regions] of linkRegionCacheRef.current.entries()) {
+                    nextRegions[key] = regions;
+                }
+
+                setTextures(nextTextures);
+                setLinkRegions(nextRegions);
             }
         };
 
@@ -244,7 +312,19 @@ export function useBookSideTextures({
         return () => {
             cancelled = true;
         };
-    }, [bookKey, totalPageEntries, canvasHeight, canvasWidth, textureLoadRadius, currentPage, enabled]);
+    }, [
+        bookKey,
+        totalPageEntries,
+        canvasHeight,
+        canvasWidth,
+        textureLoadRadius,
+        currentPage,
+        enabled,
+    ]);
 
-    return textures;
+    return { textures, linkRegions };
+}
+
+export function useBookSideTextures(options: UseBookSideTexturesOptions): DynamicTextureMap {
+    return useBookSideContent(options).textures;
 }

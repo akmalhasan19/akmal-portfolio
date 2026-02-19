@@ -31,6 +31,8 @@ export const loadingAtom = atom(false);
 // ── Selected block ───────────────────────────
 
 export const selectedBlockIdAtom = atom<string | null>(null);
+export const selectedBlockIdsAtom = atom<string[]>([]);
+export const nudgeStepAtom = atom(0.01);
 
 // ── Total page count for Book 1 ──────────────
 // This should match the number of interior pages in Book3D.
