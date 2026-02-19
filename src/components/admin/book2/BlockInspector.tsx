@@ -18,6 +18,10 @@ import {
     getImageAspectRatio,
     parseSvgAspectRatio,
 } from "@/lib/book-content/aspect-ratio";
+import {
+    applyVisualCropToAspectRatio,
+    deriveVisualCropBaseAspectRatio,
+} from "@/lib/book-content/visual-crop";
 
 interface BlockInspectorProps {
     layout: PageSideLayout;
@@ -747,9 +751,13 @@ export function BlockInspector({
                         currentAssetPath={selectedBlock.assetPath}
                         onAssetUploaded={async (url: string) => {
                             const ratio = await getImageAspectRatio(url);
+                            const fallbackBaseRatio = deriveVisualCropBaseAspectRatio(
+                                getBlockAspectRatio(selectedBlock),
+                                selectedBlock.crop,
+                            );
                             const targetRatio = selectedBlock.type === "image" && selectedBlock.shape === "circle"
                                 ? 1
-                                : (ratio ?? getBlockAspectRatio(selectedBlock));
+                                : (ratio ?? fallbackBaseRatio);
                             let nextW = selectedBlock.w;
                             let nextH = nextW / targetRatio;
                             if (nextH > 1 - selectedBlock.y) {
@@ -762,6 +770,7 @@ export function BlockInspector({
                             }
                             updateBlock(selectedBlock.id, {
                                 assetPath: url,
+                                crop: undefined,
                                 aspectRatio: targetRatio,
                                 w: clamp(nextW, 0.01, 1 - selectedBlock.x),
                                 h: clamp(nextH, 0.01, 1 - selectedBlock.y),
@@ -800,20 +809,29 @@ export function BlockInspector({
                             value={selectedBlock.svgCode}
                             onChange={(e) => {
                                 const svgCode = e.target.value;
-                                const svgRatio = parseSvgAspectRatio(svgCode) ?? getBlockAspectRatio(selectedBlock);
+                                const baseSvgRatio =
+                                    parseSvgAspectRatio(svgCode)
+                                    ?? deriveVisualCropBaseAspectRatio(
+                                        getBlockAspectRatio(selectedBlock),
+                                        selectedBlock.crop,
+                                    );
+                                const targetRatio = applyVisualCropToAspectRatio(
+                                    baseSvgRatio,
+                                    selectedBlock.crop,
+                                );
                                 let nextW = selectedBlock.w;
-                                let nextH = nextW / svgRatio;
+                                let nextH = nextW / targetRatio;
                                 if (nextH > 1 - selectedBlock.y) {
                                     nextH = 1 - selectedBlock.y;
-                                    nextW = nextH * svgRatio;
+                                    nextW = nextH * targetRatio;
                                 }
                                 if (nextW > 1 - selectedBlock.x) {
                                     nextW = 1 - selectedBlock.x;
-                                    nextH = nextW / svgRatio;
+                                    nextH = nextW / targetRatio;
                                 }
                                 updateBlock(selectedBlock.id, {
                                     svgCode,
-                                    aspectRatio: svgRatio,
+                                    aspectRatio: targetRatio,
                                     w: clamp(nextW, 0.01, 1 - selectedBlock.x),
                                     h: clamp(nextH, 0.01, 1 - selectedBlock.y),
                                 });

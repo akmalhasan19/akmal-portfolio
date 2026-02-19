@@ -8,6 +8,7 @@ import type {
     PageSideLayout,
     SvgBlock,
     TextBlock,
+    VisualCrop,
 } from "@/types/book-content";
 import { canAddBlock } from "@/lib/book-content/validation";
 import {
@@ -21,6 +22,14 @@ import { normalizePaperBackground } from "@/lib/book-content/paper-tone";
 import { useBookProfileImage } from "@/lib/book-content/useBookProfileImage";
 import { BASE_CANVAS_HEIGHT } from "@/lib/book-content/render-canvas";
 import { getBlockAspectRatio } from "@/lib/book-content/aspect-ratio";
+import { VisualBlockPreview } from "@/components/admin/VisualBlockPreview";
+import {
+    type CropDragState,
+    type VisualCropEdge,
+    buildDraggedCrop,
+    buildVisualCropBlockForEdge,
+} from "@/lib/book-content/visual-crop-interaction";
+import { normalizeVisualCrop } from "@/lib/book-content/visual-crop";
 
 const CANVAS_DISPLAY_WIDTH = 600;
 const PAGE_ASPECT_RATIO = 1.71 / 1.28;
@@ -51,6 +60,11 @@ interface ResizeState {
     startY: number;
     origins: Record<string, BlockRect>;
     bounds: BlockRect;
+}
+
+interface CropState {
+    blockId: string;
+    drag: CropDragState;
 }
 
 interface PageCanvasStageProps {
@@ -109,6 +123,13 @@ function areIdListsEqual(a: string[], b: string[]): boolean {
     return true;
 }
 
+function isVisualBlock(block: LayoutBlock): block is LayoutBlock & (
+    { type: "image"; crop?: VisualCrop }
+    | { type: "svg"; crop?: VisualCrop }
+) {
+    return block.type === "image" || block.type === "svg";
+}
+
 export function PageCanvasStage({
     layout,
     onLayoutChange,
@@ -127,6 +148,15 @@ export function PageCanvasStage({
     const stageRef = useRef<HTMLDivElement>(null);
     const [dragging, setDragging] = useState<DragState | null>(null);
     const [resizing, setResizing] = useState<ResizeState | null>(null);
+    const [cropping, setCropping] = useState<CropState | null>(null);
+    const [cropPreview, setCropPreview] = useState<{
+        blockId: string;
+        crop: VisualCrop;
+        x: number;
+        y: number;
+        w: number;
+        h: number;
+    } | null>(null);
     const multiSelectedBounds = useMemo(() => {
         if (selectedBlockIds.length <= 1) {
             return null;
@@ -440,8 +470,79 @@ export function PageCanvasStage({
         ],
     );
 
+    const handleCropPointerDown = useCallback(
+        (e: React.PointerEvent, block: LayoutBlock, edge: VisualCropEdge) => {
+            if (!isVisualBlock(block)) {
+                return;
+            }
+
+            e.stopPropagation();
+            e.preventDefault();
+            applySelection([block.id], block.id);
+            setDragging(null);
+            setResizing(null);
+
+            const startCrop = normalizeVisualCrop(block.crop);
+            setCropping({
+                blockId: block.id,
+                drag: {
+                    edge,
+                    startX: e.clientX,
+                    startY: e.clientY,
+                    startCrop,
+                    startRect: { x: block.x, y: block.y, w: block.w, h: block.h },
+                },
+            });
+            const previewBlock = buildVisualCropBlockForEdge(
+                block,
+                startCrop,
+                MIN_BLOCK_SIZE,
+                edge,
+            );
+            setCropPreview({
+                blockId: block.id,
+                crop: startCrop,
+                x: previewBlock.x,
+                y: previewBlock.y,
+                w: previewBlock.w,
+                h: previewBlock.h,
+            });
+            (e.target as HTMLElement).setPointerCapture(e.pointerId);
+        },
+        [applySelection],
+    );
+
     const handlePointerMove = useCallback(
         (e: React.PointerEvent) => {
+            if (cropping) {
+                const nextCrop = buildDraggedCrop(
+                    cropping.drag,
+                    e.clientX,
+                    e.clientY,
+                    safeArea.w,
+                    safeArea.h,
+                );
+                const source = layout.blocks.find((b) => b.id === cropping.blockId);
+                if (!source) {
+                    return;
+                }
+                const previewBlock = buildVisualCropBlockForEdge(
+                    source,
+                    nextCrop,
+                    MIN_BLOCK_SIZE,
+                    cropping.drag.edge,
+                );
+                setCropPreview({
+                    blockId: cropping.blockId,
+                    crop: nextCrop,
+                    x: previewBlock.x,
+                    y: previewBlock.y,
+                    w: previewBlock.w,
+                    h: previewBlock.h,
+                });
+                return;
+            }
+
             if (dragging) {
                 const rawDx =
                     safeArea.w > 0 ? (e.clientX - dragging.startX) / safeArea.w : 0;
@@ -559,13 +660,35 @@ export function PageCanvasStage({
                 }));
             }
         },
-        [dragging, onLayoutChange, resizing, safeArea.h, safeArea.w],
+        [cropping, dragging, layout.blocks, onLayoutChange, resizing, safeArea.h, safeArea.w],
     );
 
     const handlePointerUp = useCallback(() => {
+        if (cropping) {
+            const nextCrop =
+                cropPreview && cropPreview.blockId === cropping.blockId
+                    ? cropPreview.crop
+                    : cropping.drag.startCrop;
+            onLayoutChange((prev) => ({
+                ...prev,
+                blocks: prev.blocks.map((block) =>
+                    block.id === cropping.blockId
+                        ? buildVisualCropBlockForEdge(
+                            block,
+                            nextCrop,
+                            MIN_BLOCK_SIZE,
+                            cropping.drag.edge,
+                        )
+                        : block,
+                ),
+            }));
+        }
+
         setDragging(null);
         setResizing(null);
-    }, []);
+        setCropping(null);
+        setCropPreview(null);
+    }, [cropPreview, cropping, onLayoutChange]);
 
     const handleResizePointerDown = useCallback(
         (e: React.PointerEvent, block: LayoutBlock) => {
@@ -734,11 +857,25 @@ export function PageCanvasStage({
                 {sortedBlocks.map((block) => {
                     const isSelected = selectedBlockIdSet.has(block.id);
                     const isPrimarySelection = selectedBlockId === block.id;
-                    const left = safeArea.x + block.x * safeArea.w;
-                    const top = safeArea.y + block.y * safeArea.h;
-                    const width = block.w * safeArea.w;
-                    const height = block.h * safeArea.h;
+                    const isVisual = isVisualBlock(block);
+                    const canCrop = isVisual
+                        && (block.type === "image"
+                            ? Boolean(block.assetPath)
+                            : Boolean(sanitizeSvgCode(block.svgCode)));
+                    const previewForBlock =
+                        cropPreview && cropPreview.blockId === block.id ? cropPreview : null;
+                    const previewX = previewForBlock ? previewForBlock.x : block.x;
+                    const previewY = previewForBlock ? previewForBlock.y : block.y;
+                    const previewW = previewForBlock ? previewForBlock.w : block.w;
+                    const previewH = previewForBlock ? previewForBlock.h : block.h;
+                    const left = safeArea.x + previewX * safeArea.w;
+                    const top = safeArea.y + previewY * safeArea.h;
+                    const width = previewW * safeArea.w;
+                    const height = previewH * safeArea.h;
                     const circlePreviewSize = Math.min(width, height);
+                    const effectiveCrop = previewForBlock
+                        ? previewForBlock.crop
+                        : (isVisual ? block.crop : undefined);
 
                     return (
                         <div
@@ -788,23 +925,19 @@ export function PageCanvasStage({
                                                     height: circlePreviewSize,
                                                 }}
                                             >
-                                                {/* eslint-disable-next-line @next/next/no-img-element */}
-                                                <img
+                                                <VisualBlockPreview
                                                     src={block.assetPath}
                                                     alt="Block image"
-                                                    className="h-full w-full"
-                                                    style={{ objectFit: block.objectFit }}
-                                                    draggable={false}
+                                                    objectFit={block.objectFit}
+                                                    crop={effectiveCrop}
                                                 />
                                             </div>
                                         ) : (
-                                            // eslint-disable-next-line @next/next/no-img-element
-                                            <img
+                                            <VisualBlockPreview
                                                 src={block.assetPath}
                                                 alt="Block image"
-                                                className="h-full w-full"
-                                                style={{ objectFit: block.objectFit }}
-                                                draggable={false}
+                                                objectFit={block.objectFit}
+                                                crop={effectiveCrop}
                                             />
                                         )
                                     ) : (
@@ -826,13 +959,11 @@ export function PageCanvasStage({
                                             );
                                         }
                                         return (
-                                            // eslint-disable-next-line @next/next/no-img-element
-                                            <img
+                                            <VisualBlockPreview
                                                 src={svgUrl}
                                                 alt="SVG block preview"
-                                                className="h-full w-full"
-                                                style={{ objectFit: block.objectFit }}
-                                                draggable={false}
+                                                objectFit={block.objectFit}
+                                                crop={effectiveCrop}
                                             />
                                         );
                                     })()}
@@ -855,6 +986,31 @@ export function PageCanvasStage({
                                     onPointerDown={(e) => handleResizePointerDown(e, block)}
                                     onClick={(e) => e.stopPropagation()}
                                 />
+                            )}
+
+                            {isPrimarySelection && !multiSelectedBounds && canCrop && (
+                                <>
+                                    <div
+                                        className="absolute left-1/2 top-0 h-2 w-5 -translate-x-1/2 -translate-y-1/2 cursor-ns-resize rounded-full border border-neutral-500 bg-white/90"
+                                        onPointerDown={(e) => handleCropPointerDown(e, block, "top")}
+                                        onClick={(e) => e.stopPropagation()}
+                                    />
+                                    <div
+                                        className="absolute bottom-0 left-1/2 h-2 w-5 -translate-x-1/2 translate-y-1/2 cursor-ns-resize rounded-full border border-neutral-500 bg-white/90"
+                                        onPointerDown={(e) => handleCropPointerDown(e, block, "bottom")}
+                                        onClick={(e) => e.stopPropagation()}
+                                    />
+                                    <div
+                                        className="absolute left-0 top-1/2 h-5 w-2 -translate-x-1/2 -translate-y-1/2 cursor-ew-resize rounded-full border border-neutral-500 bg-white/90"
+                                        onPointerDown={(e) => handleCropPointerDown(e, block, "left")}
+                                        onClick={(e) => e.stopPropagation()}
+                                    />
+                                    <div
+                                        className="absolute right-0 top-1/2 h-5 w-2 translate-x-1/2 -translate-y-1/2 cursor-ew-resize rounded-full border border-neutral-500 bg-white/90"
+                                        onPointerDown={(e) => handleCropPointerDown(e, block, "right")}
+                                        onClick={(e) => e.stopPropagation()}
+                                    />
+                                </>
                             )}
                         </div>
                     );

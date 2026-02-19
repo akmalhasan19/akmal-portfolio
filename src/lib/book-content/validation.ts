@@ -3,11 +3,13 @@ import type {
     LinkStyleConfig,
     PageSideLayout,
     TextStyleConfig,
+    VisualCrop,
 } from "@/types/book-content";
 import { sanitizeLinkLabel, sanitizeLinkUrl } from "./links";
 import { normalizePaperBackground } from "./paper-tone";
 import { sanitizeSvgCode } from "./svg-utils";
 import { normalizeAspectRatio, parseSvgAspectRatio } from "./aspect-ratio";
+import { toOptionalVisualCrop } from "./visual-crop";
 
 const MAX_BLOCKS_PER_SIDE = 20;
 const MIN_FONT_SIZE = 8;
@@ -32,6 +34,20 @@ function clamp(value: number, min: number, max: number): number {
 
 function validateBlockLinkUrl(linkUrl: unknown): string {
     return sanitizeLinkUrl(typeof linkUrl === "string" ? linkUrl : "");
+}
+
+function validateVisualCrop(crop: unknown): VisualCrop | undefined {
+    if (!crop || typeof crop !== "object") {
+        return undefined;
+    }
+
+    const candidate = crop as Partial<Record<keyof VisualCrop, unknown>>;
+    return toOptionalVisualCrop({
+        left: toFiniteNumber(candidate.left),
+        right: toFiniteNumber(candidate.right),
+        top: toFiniteNumber(candidate.top),
+        bottom: toFiniteNumber(candidate.bottom),
+    });
 }
 
 export function clampNormalizedRect(block: LayoutBlock): LayoutBlock {
@@ -174,6 +190,7 @@ export function validateLayout(layout: PageSideLayout): ValidationResult {
                 objectFit: clamped.objectFit === "contain" ? "contain" : "cover",
                 aspectRatio: normalizeAspectRatio(svgAspectRatio, clamped.w / clamped.h),
                 linkUrl: validateBlockLinkUrl(clamped.linkUrl),
+                crop: validateVisualCrop((clamped as { crop?: unknown }).crop),
             });
             continue;
         }
@@ -185,6 +202,7 @@ export function validateLayout(layout: PageSideLayout): ValidationResult {
                 objectFit: clamped.objectFit === "contain" ? "contain" : "cover",
                 shape: clamped.shape === "circle" ? "circle" : "rect",
                 linkUrl: validateBlockLinkUrl(clamped.linkUrl),
+                crop: validateVisualCrop((clamped as { crop?: unknown }).crop),
             });
             continue;
         }

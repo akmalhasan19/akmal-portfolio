@@ -90,6 +90,8 @@ export interface ImageBlock extends BlockBase {
     objectFit: "cover" | "contain";
     /** Visual clipping shape for image rendering. */
     shape?: "rect" | "circle";
+    /** Optional crop values (0..1 per edge) applied to the source asset. */
+    crop?: VisualCrop;
 }
 
 export interface SvgBlock extends BlockBase {
@@ -98,6 +100,19 @@ export interface SvgBlock extends BlockBase {
     svgCode: string;
     /** Object-fit mode for rendering. */
     objectFit: "cover" | "contain";
+    /** Optional crop values (0..1 per edge) applied to the rendered SVG source. */
+    crop?: VisualCrop;
+}
+
+export interface VisualCrop {
+    /** Cropped ratio from the left side of source media. */
+    left: number;
+    /** Cropped ratio from the right side of source media. */
+    right: number;
+    /** Cropped ratio from the top side of source media. */
+    top: number;
+    /** Cropped ratio from the bottom side of source media. */
+    bottom: number;
 }
 
 export interface LinkBlock extends BlockBase {

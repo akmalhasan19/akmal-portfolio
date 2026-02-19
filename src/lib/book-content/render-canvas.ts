@@ -8,10 +8,11 @@ import type {
 import { computeSafeArea } from "./padding";
 import { svgToDataUrl } from "./svg-utils";
 import { normalizePaperBackground } from "./paper-tone";
+import { getVisualCropSourceRect } from "./visual-crop";
 
 // ── Constants ────────────────────────────────
 
-export const CANVAS_RENDERER_VERSION = "5";
+export const CANVAS_RENDERER_VERSION = "6";
 export const BASE_CANVAS_HEIGHT = 1536;
 const DEFAULT_BG_COLOR = normalizePaperBackground();
 const MAX_IMAGE_CACHE_ENTRIES = 96;
@@ -233,6 +234,11 @@ function drawVisualBlock(
     const drawY = isCircleImage ? y + (h - drawBoxSize) * 0.5 : y;
     const drawW = isCircleImage ? drawBoxSize : w;
     const drawH = isCircleImage ? drawBoxSize : h;
+    const source = getVisualCropSourceRect(img.width, img.height, block.crop);
+
+    if (drawW <= 0 || drawH <= 0 || source.width <= 0 || source.height <= 0) {
+        return;
+    }
 
     ctx.save();
     if (isCircleImage) {
@@ -248,8 +254,8 @@ function drawVisualBlock(
     }
 
     if (block.objectFit === "contain") {
-        // Fit the image inside the block
-        const imgAspect = img.width / img.height;
+        // Fit the cropped source inside the block.
+        const imgAspect = source.width / source.height;
         const blockAspect = drawW / drawH;
         let targetW = drawW;
         let targetH = drawH;
@@ -264,22 +270,32 @@ function drawVisualBlock(
             targetX = drawX + (drawW - targetW) / 2;
         }
 
-        ctx.drawImage(img, targetX, targetY, targetW, targetH);
+        ctx.drawImage(
+            img,
+            source.x,
+            source.y,
+            source.width,
+            source.height,
+            targetX,
+            targetY,
+            targetW,
+            targetH,
+        );
     } else {
-        // Cover the block
-        const imgAspect = img.width / img.height;
+        // Cover the block using the cropped source as the starting viewport.
+        const imgAspect = source.width / source.height;
         const blockAspect = drawW / drawH;
-        let sx = 0;
-        let sy = 0;
-        let sW = img.width;
-        let sH = img.height;
+        let sx = source.x;
+        let sy = source.y;
+        let sW = source.width;
+        let sH = source.height;
 
         if (imgAspect > blockAspect) {
-            sW = img.height * blockAspect;
-            sx = (img.width - sW) / 2;
+            sW = source.height * blockAspect;
+            sx = source.x + (source.width - sW) / 2;
         } else {
-            sH = img.width / blockAspect;
-            sy = (img.height - sH) / 2;
+            sH = source.width / blockAspect;
+            sy = source.y + (source.height - sH) / 2;
         }
 
         ctx.drawImage(img, sx, sy, sW, sH, drawX, drawY, drawW, drawH);
