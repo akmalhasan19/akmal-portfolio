@@ -85,6 +85,26 @@ interface WrappedLine {
     isParagraphEnd: boolean;
 }
 
+interface ParsedListLine {
+    marker: string;
+    content: string;
+}
+
+const LIST_LINE_PATTERN = /^\s*([•\-*]|\d+[.)]|[a-zA-Z]+[.)])\s*(.*)$/;
+const LIST_MARKER_FALLBACK_GAP_PX = 8;
+
+function parseListLine(paragraph: string): ParsedListLine | null {
+    const match = paragraph.match(LIST_LINE_PATTERN);
+    if (!match) {
+        return null;
+    }
+
+    return {
+        marker: match[1],
+        content: match[2] ?? "",
+    };
+}
+
 function splitTokenByWidth(
     ctx: CanvasRenderingContext2D,
     token: string,
@@ -301,8 +321,72 @@ function drawTextBlock(
     ctx.textBaseline = "top";
 
     const linePixelHeight = effectiveFontSize * lineHeight;
-    const wrappedLines = wrapTextDetailed(ctx, block.content, w);
-    drawTextLines(ctx, wrappedLines, textAlign, x, y, w, h, linePixelHeight);
+    const listType = block.style.listType ?? "none";
+    if (listType !== "none") {
+        const paragraphs = block.content.split("\n");
+        const markerGapWidth = Math.max(
+            LIST_MARKER_FALLBACK_GAP_PX,
+            ctx.measureText(" ").width,
+        );
+        let currentY = y;
+
+        for (const paragraph of paragraphs) {
+            if (currentY > y + h) {
+                break;
+            }
+
+            if (paragraph === "") {
+                currentY += linePixelHeight;
+                continue;
+            }
+
+            const parsedListLine = parseListLine(paragraph);
+            if (!parsedListLine) {
+                const wrapped = wrapTextDetailed(ctx, paragraph, w);
+                for (const wrappedLine of wrapped) {
+                    if (currentY > y + h) {
+                        break;
+                    }
+                    drawAlignedTextLine(ctx, wrappedLine, "left", x, currentY, w);
+                    currentY += linePixelHeight;
+                }
+                continue;
+            }
+
+            const markerWidth = ctx.measureText(parsedListLine.marker).width + markerGapWidth;
+            const hangingIndentWidth = Math.max(1, Math.min(w - 1, markerWidth));
+            const contentWidth = Math.max(1, w - hangingIndentWidth);
+            const wrappedContent = wrapTextDetailed(ctx, parsedListLine.content, contentWidth);
+
+            if (currentY <= y + h) {
+                ctx.textAlign = "left";
+                ctx.fillText(parsedListLine.marker, x, currentY);
+            }
+
+            if (wrappedContent.length === 0) {
+                currentY += linePixelHeight;
+                continue;
+            }
+
+            for (const wrappedLine of wrappedContent) {
+                if (currentY > y + h) {
+                    break;
+                }
+                drawAlignedTextLine(
+                    ctx,
+                    wrappedLine,
+                    "left",
+                    x + hangingIndentWidth,
+                    currentY,
+                    contentWidth,
+                );
+                currentY += linePixelHeight;
+            }
+        }
+    } else {
+        const wrappedLines = wrapTextDetailed(ctx, block.content, w);
+        drawTextLines(ctx, wrappedLines, textAlign, x, y, w, h, linePixelHeight);
+    }
     ctx.restore();
 }
 

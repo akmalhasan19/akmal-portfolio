@@ -1661,13 +1661,33 @@ export default function Hero() {
       return;
     }
 
-    const anchor = document.createElement('a');
-    anchor.href = variant.href;
-    anchor.target = '_blank';
-    anchor.rel = 'noopener noreferrer';
-    anchor.download = variant.fileName;
-    anchor.click();
-    setResumeModalOpen(false);
+    const triggerDownload = (href: string) => {
+      const anchor = document.createElement('a');
+      anchor.href = href;
+      anchor.download = variant.fileName;
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+    };
+
+    fetch(variant.href, { method: 'GET' })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`Resume file not found: ${variant.href}`);
+        }
+        return response.blob();
+      })
+      .then((blob) => {
+        const objectUrl = URL.createObjectURL(blob);
+        triggerDownload(objectUrl);
+        URL.revokeObjectURL(objectUrl);
+      })
+      .catch(() => {
+        triggerDownload(variant.href);
+      })
+      .finally(() => {
+        setResumeModalOpen(false);
+      });
   }, []);
 
   useEffect(() => {

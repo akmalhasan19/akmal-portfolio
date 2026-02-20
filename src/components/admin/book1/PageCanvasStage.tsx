@@ -1007,6 +1007,8 @@ export function PageCanvasStage({
                                         whiteSpace: "pre-wrap",
                                         overflowWrap: "anywhere",
                                         wordBreak: "break-word",
+                                        paddingLeft: (block.style.listType ?? "none") !== "none" ? "1.6em" : undefined,
+                                        textIndent: (block.style.listType ?? "none") !== "none" ? "-1.6em" : undefined,
                                     }}
                                 >
                                     {block.content || "..."}
