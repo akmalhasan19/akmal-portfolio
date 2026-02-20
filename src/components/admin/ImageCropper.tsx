@@ -32,7 +32,7 @@ function createCenteredCrop(
             makeAspectCrop(
                 {
                     unit: "%",
-                    width: 90,
+                    width: 100,
                 },
                 aspectRatio,
                 imageWidth,
@@ -47,8 +47,8 @@ function createCenteredCrop(
     return centerCrop(
         {
             unit: "%",
-            width: 90,
-            height: 90,
+            width: 100,
+            height: 100,
         },
         imageWidth,
         imageHeight
@@ -95,8 +95,9 @@ export function ImageCropper({
             const img = e.currentTarget;
             const { naturalWidth, naturalHeight } = img;
             setImageDimensions({ width: naturalWidth, height: naturalHeight });
-            setCrop(createCenteredCrop(naturalWidth, naturalHeight, aspectRatio));
-            setCompletedCrop(null);
+            const initialCrop = createCenteredCrop(naturalWidth, naturalHeight, aspectRatio);
+            setCrop(initialCrop);
+            setCompletedCrop(initialCrop);
         },
         [aspectRatio]
     );

@@ -3,6 +3,26 @@ import type { LayoutBlock } from "@/types/book-content";
 const MIN_RATIO = 0.05;
 const MAX_RATIO = 20;
 
+/**
+ * Height-to-width ratio of a book page in the 3D model (1.71 tall × 1.28 wide).
+ *
+ * Block coordinates use normalised [0, 1] space where w = 1 means full page
+ * width and h = 1 means full page height.  Because the page is taller than it
+ * is wide, a pixel-space aspect ratio must be multiplied by this factor to
+ * obtain the correct normalised-coordinate ratio (block.w / block.h).
+ */
+export const PAGE_HEIGHT_WIDTH_RATIO = 1.71 / 1.28;
+
+/**
+ * Converts an image's pixel aspect ratio (naturalWidth / naturalHeight) to the
+ * block normalised-coordinate ratio that preserves the image's visual
+ * proportions on the non-square book page.
+ */
+export function imagePixelRatioToBlockRatio(pixelRatio: number): number {
+    const safe = Number.isFinite(pixelRatio) && pixelRatio > 0 ? pixelRatio : 1;
+    return normalizeAspectRatio(safe * PAGE_HEIGHT_WIDTH_RATIO);
+}
+
 function clamp(value: number, min: number, max: number): number {
     return Math.min(max, Math.max(min, value));
 }

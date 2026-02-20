@@ -10,7 +10,40 @@ import { ImageCropper } from "@/components/admin/ImageCropper";
 interface ImageUploadFieldProps {
     blockId: string;
     currentAssetPath: string;
-    onAssetUploaded: (publicUrl: string) => void;
+    onAssetUploaded: (publicUrl: string, uploadedAspectRatio: number | null) => void | Promise<void>;
+}
+
+async function getBlobAspectRatio(blob: Blob): Promise<number | null> {
+    try {
+        if (typeof createImageBitmap === "function") {
+            const bitmap = await createImageBitmap(blob);
+            const ratio = bitmap.height > 0 ? bitmap.width / bitmap.height : null;
+            bitmap.close();
+            return Number.isFinite(ratio) && ratio !== null && ratio > 0 ? ratio : null;
+        }
+
+        const objectUrl = URL.createObjectURL(blob);
+        try {
+            const ratio = await new Promise<number | null>((resolve) => {
+                const img = new Image();
+                img.onload = () => {
+                    const nextRatio = img.naturalHeight > 0
+                        ? img.naturalWidth / img.naturalHeight
+                        : null;
+                    resolve(Number.isFinite(nextRatio) && nextRatio !== null && nextRatio > 0
+                        ? nextRatio
+                        : null);
+                };
+                img.onerror = () => resolve(null);
+                img.src = objectUrl;
+            });
+            return ratio;
+        } finally {
+            URL.revokeObjectURL(objectUrl);
+        }
+    } catch {
+        return null;
+    }
 }
 
 export function ImageUploadField({
@@ -48,6 +81,7 @@ export function ImageUploadField({
             setUploading(true);
 
             try {
+                const uploadedAspectRatio = await getBlobAspectRatio(webpBlob);
                 const supabase = getSupabaseBrowserClient();
                 const publicUrl = await uploadPageAsset(
                     supabase,
@@ -57,7 +91,7 @@ export function ImageUploadField({
                     blockId,
                     webpBlob,
                 );
-                onAssetUploaded(publicUrl);
+                await onAssetUploaded(publicUrl, uploadedAspectRatio);
             } catch (err) {
                 setError(err instanceof Error ? err.message : "Upload gagal.");
             } finally {

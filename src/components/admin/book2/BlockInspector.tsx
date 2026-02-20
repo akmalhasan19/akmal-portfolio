@@ -17,6 +17,7 @@ import { normalizePaperBackground } from "@/lib/book-content/paper-tone";
 import {
     getBlockAspectRatio,
     getImageAspectRatio,
+    imagePixelRatioToBlockRatio,
     parseSvgAspectRatio,
 } from "@/lib/book-content/aspect-ratio";
 import {
@@ -1164,15 +1165,17 @@ export function BlockInspector({
                     <ImageUploadField
                         blockId={selectedBlock.id}
                         currentAssetPath={selectedBlock.assetPath}
-                        onAssetUploaded={async (url: string) => {
-                            const ratio = await getImageAspectRatio(url);
+                        onAssetUploaded={async (url: string, uploadedAspectRatio: number | null) => {
+                            const pixelRatio = uploadedAspectRatio ?? await getImageAspectRatio(url);
                             const fallbackBaseRatio = deriveVisualCropBaseAspectRatio(
                                 getBlockAspectRatio(selectedBlock),
                                 selectedBlock.crop,
                             );
                             const targetRatio = selectedBlock.type === "image" && selectedBlock.shape === "circle"
                                 ? 1
-                                : (ratio ?? fallbackBaseRatio);
+                                : pixelRatio != null
+                                    ? imagePixelRatioToBlockRatio(pixelRatio)
+                                    : fallbackBaseRatio;
                             let nextW = selectedBlock.w;
                             let nextH = nextW / targetRatio;
                             if (nextH > 1 - selectedBlock.y) {
