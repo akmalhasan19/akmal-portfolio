@@ -93,6 +93,12 @@ export function validateTextStyle(
             typeof style?.fontFamily === "string" && style.fontFamily.trim()
                 ? style.fontFamily
                 : "sans-serif",
+        listType:
+            style?.listType === "bullet"
+            || style?.listType === "number"
+            || style?.listType === "alpha"
+                ? style.listType
+                : "none",
     };
 }
 

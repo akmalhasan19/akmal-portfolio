@@ -32,6 +32,8 @@ export interface TextStyleConfig {
     lineHeight: number;
     /** Font family name. */
     fontFamily: string;
+    /** List formatting mode for multi-line text content. */
+    listType?: "none" | "bullet" | "number" | "alpha";
 }
 
 export interface LinkStyleConfig {

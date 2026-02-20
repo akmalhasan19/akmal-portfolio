@@ -273,6 +273,7 @@ export function PageCanvasStage({
                             color: "#000000",
                             lineHeight: 1.4,
                             fontFamily: "sans-serif",
+                            listType: "none",
                         },
                     } satisfies TextBlock)
                     : ({
@@ -364,6 +365,12 @@ export function PageCanvasStage({
                 return;
             }
 
+            if (event.key === "Backspace" || event.key === "Delete") {
+                event.preventDefault();
+                deleteSelectedBlocks();
+                return;
+            }
+
             const safeStep = clamp(
                 Number.isFinite(nudgeStep) ? nudgeStep : 0.01,
                 MIN_NUDGE_STEP,
@@ -397,7 +404,7 @@ export function PageCanvasStage({
         return () => {
             window.removeEventListener("keydown", handleKeyDown);
         };
-    }, [moveSelectedBlocks, nudgeStep, selectedBlockIds.length]);
+    }, [deleteSelectedBlocks, moveSelectedBlocks, nudgeStep, selectedBlockIds.length]);
 
     const handlePointerDown = useCallback(
         (e: React.PointerEvent, block: LayoutBlock) => {

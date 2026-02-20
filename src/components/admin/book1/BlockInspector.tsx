@@ -31,9 +31,106 @@ interface BlockInspectorProps {
 const DEFAULT_MOVE_STEP = 0.01;
 const MIN_MOVE_STEP = 0.001;
 const MAX_MOVE_STEP = 0.2;
+const LIST_PREFIX_PATTERN = /^\s*(?:[•\-*]|\d+[.)]|[a-zA-Z][.)])\s+/;
 
 function clamp(value: number, min: number, max: number): number {
     return Math.min(max, Math.max(min, value));
+}
+
+type TextListType = NonNullable<TextBlock["style"]["listType"]>;
+
+function toAlphaSequence(index: number): string {
+    let value = Math.max(1, Math.floor(index));
+    let result = "";
+
+    while (value > 0) {
+        value -= 1;
+        result = String.fromCharCode(97 + (value % 26)) + result;
+        value = Math.floor(value / 26);
+    }
+
+    return result;
+}
+
+function parseNumericListIndex(line: string): number | null {
+    const match = line.match(/^\s*(\d+)[.)]\s+/);
+    if (!match) {
+        return null;
+    }
+    const parsed = Number.parseInt(match[1], 10);
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseAlphaListIndex(line: string): number | null {
+    const match = line.match(/^\s*([a-zA-Z]+)[.)]\s+/);
+    if (!match) {
+        return null;
+    }
+
+    const normalized = match[1].toLowerCase();
+    let value = 0;
+    for (const char of normalized) {
+        value = value * 26 + (char.charCodeAt(0) - 96);
+    }
+    return value > 0 ? value : null;
+}
+
+function getLineRange(text: string, cursor: number): { start: number; end: number } {
+    const start = text.lastIndexOf("\n", Math.max(0, cursor - 1)) + 1;
+    const endIndex = text.indexOf("\n", cursor);
+    return {
+        start,
+        end: endIndex === -1 ? text.length : endIndex,
+    };
+}
+
+function buildNextListPrefix(listType: TextListType, currentLine: string): string {
+    if (listType === "bullet") {
+        return "• ";
+    }
+
+    if (listType === "number") {
+        const current = parseNumericListIndex(currentLine) ?? 0;
+        return `${Math.max(1, current + 1)}. `;
+    }
+
+    if (listType === "alpha") {
+        const current = parseAlphaListIndex(currentLine) ?? 0;
+        return `${toAlphaSequence(Math.max(1, current + 1))}. `;
+    }
+
+    return "";
+}
+
+function applyListTypeToContent(content: string, listType: TextListType): string {
+    const lines = content.split("\n");
+    let listIndex = 1;
+
+    return lines
+        .map((line) => {
+            const withoutPrefix = line.replace(LIST_PREFIX_PATTERN, "");
+            if (withoutPrefix.trim().length === 0) {
+                return "";
+            }
+
+            const normalized = withoutPrefix.trimStart();
+            if (listType === "none") {
+                return normalized;
+            }
+            if (listType === "bullet") {
+                return `• ${normalized}`;
+            }
+            if (listType === "number") {
+                const currentIndex = listIndex;
+                listIndex += 1;
+                return `${currentIndex}. ${normalized}`;
+            }
+
+            const alphaMarker = toAlphaSequence(listIndex);
+            listIndex += 1;
+            return `${alphaMarker}. ${normalized}`;
+        })
+        .join("\n");
 }
 
 function getBounds(blocks: LayoutBlock[]) {
@@ -96,6 +193,82 @@ export function BlockInspector({
                     : b,
             ),
         }));
+    };
+
+    const updateTextListType = (blockId: string, listType: TextListType) => {
+        onLayoutChange((prev) => ({
+            ...prev,
+            blocks: prev.blocks.map((block) => {
+                if (block.id !== blockId || block.type !== "text") {
+                    return block;
+                }
+
+                return {
+                    ...block,
+                    content: applyListTypeToContent(block.content, listType),
+                    style: {
+                        ...block.style,
+                        listType,
+                    },
+                };
+            }),
+        }));
+    };
+
+    const handleTextContentKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        if (selectedBlock?.type !== "text") {
+            return;
+        }
+
+        if (
+            e.key !== "Enter"
+            || e.shiftKey
+            || e.altKey
+            || e.ctrlKey
+            || e.metaKey
+        ) {
+            return;
+        }
+
+        const listType = selectedBlock.style.listType ?? "none";
+        if (listType === "none") {
+            return;
+        }
+
+        const target = e.currentTarget;
+        const value = target.value;
+        const selectionStart = target.selectionStart;
+        const selectionEnd = target.selectionEnd;
+        const lineRange = getLineRange(value, selectionStart);
+        const currentLine = value.slice(lineRange.start, lineRange.end);
+        const plainText = currentLine.replace(LIST_PREFIX_PATTERN, "").trim();
+        const hasListPrefix = LIST_PREFIX_PATTERN.test(currentLine);
+
+        if (hasListPrefix && plainText.length === 0) {
+            e.preventDefault();
+            const clearedLine = currentLine.replace(LIST_PREFIX_PATTERN, "");
+            const nextContent = `${value.slice(0, lineRange.start)}${clearedLine}${value.slice(lineRange.end)}`;
+            const nextCursorPos = lineRange.start + clearedLine.length;
+            updateBlock(selectedBlock.id, { content: nextContent });
+            requestAnimationFrame(() => {
+                target.selectionStart = nextCursorPos;
+                target.selectionEnd = nextCursorPos;
+            });
+            return;
+        }
+
+        const nextPrefix = buildNextListPrefix(listType, currentLine);
+        e.preventDefault();
+
+        const insertion = `\n${nextPrefix}`;
+        const nextContent = `${value.slice(0, selectionStart)}${insertion}${value.slice(selectionEnd)}`;
+        const nextCursorPos = selectionStart + insertion.length;
+
+        updateBlock(selectedBlock.id, { content: nextContent });
+        requestAnimationFrame(() => {
+            target.selectionStart = nextCursorPos;
+            target.selectionEnd = nextCursorPos;
+        });
     };
 
     const moveBlock = (
@@ -586,9 +759,34 @@ export function BlockInspector({
                             onChange={(e) =>
                                 updateBlock(selectedBlock.id, { content: e.target.value })
                             }
+                            onKeyDown={handleTextContentKeyDown}
                             rows={3}
                             className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1.5 text-xs outline-none focus:border-amber-500 resize-y"
                         />
+                    </div>
+
+                    <div className="space-y-0.5">
+                        <label className="text-[10px] uppercase text-neutral-600">
+                            Daftar
+                        </label>
+                        <select
+                            value={selectedBlock.style.listType ?? "none"}
+                            onChange={(e) =>
+                                updateTextListType(
+                                    selectedBlock.id,
+                                    e.target.value as TextListType,
+                                )
+                            }
+                            className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs outline-none focus:border-amber-500"
+                        >
+                            <option value="none">Tidak ada</option>
+                            <option value="bullet">Bullet (•)</option>
+                            <option value="number">Angka (1, 2, 3)</option>
+                            <option value="alpha">Huruf (a, b, c)</option>
+                        </select>
+                        <p className="text-[10px] text-neutral-500">
+                            Saat mode daftar aktif, Enter akan lanjut marker baris berikutnya.
+                        </p>
                     </div>
 
                     <div className="grid grid-cols-2 gap-2">
