@@ -2,9 +2,13 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import { useAtomValue } from 'jotai';
+import { languageAtom, SHARED_TRANSLATIONS } from '@/lib/i18n/language';
 
 export default function Navbar() {
     const [isOpen, setIsOpen] = useState(false);
+    const language = useAtomValue(languageAtom);
+    const t = SHARED_TRANSLATIONS[language];
 
     return (
         <nav className="fixed w-full z-50 top-0 start-0 border-b border-white/10 bg-black/30 backdrop-blur-md">
@@ -21,7 +25,7 @@ export default function Navbar() {
                     aria-controls="navbar-default"
                     aria-expanded={isOpen}
                 >
-                    <span className="sr-only">Open main menu</span>
+                    <span className="sr-only">{t.navbarOpenMenu}</span>
                     <svg
                         className="w-5 h-5"
                         aria-hidden="true"
@@ -46,7 +50,7 @@ export default function Navbar() {
                                 className="block py-2 px-3 text-white bg-blue-700 rounded-md md:bg-transparent md:text-blue-500 md:p-0"
                                 aria-current="page"
                             >
-                                Home
+                                {t.navHome}
                             </Link>
                         </li>
                         <li>
@@ -54,7 +58,7 @@ export default function Navbar() {
                                 href="#about"
                                 className="block py-2 px-3 text-gray-300 rounded-md hover:bg-white/10 md:hover:bg-transparent md:border-0 md:hover:text-blue-500 md:p-0"
                             >
-                                About
+                                {t.navAbout}
                             </Link>
                         </li>
                         <li>
@@ -62,7 +66,7 @@ export default function Navbar() {
                                 href="#portfolio"
                                 className="block py-2 px-3 text-gray-300 rounded-md hover:bg-white/10 md:hover:bg-transparent md:border-0 md:hover:text-blue-500 md:p-0"
                             >
-                                Portfolio
+                                {t.navPortfolio}
                             </Link>
                         </li>
                         <li>
@@ -70,7 +74,7 @@ export default function Navbar() {
                                 href="#contact"
                                 className="block py-2 px-3 text-gray-300 rounded-md hover:bg-white/10 md:hover:bg-transparent md:border-0 md:hover:text-blue-500 md:p-0"
                             >
-                                Contact
+                                {t.navContact}
                             </Link>
                         </li>
                     </ul>

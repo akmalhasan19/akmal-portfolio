@@ -50,6 +50,26 @@ function validateVisualCrop(crop: unknown): VisualCrop | undefined {
     });
 }
 
+function validateTextContentByLanguage(
+    value: unknown,
+): Partial<Record<"id" | "en", string>> | undefined {
+    if (!value || typeof value !== "object") {
+        return undefined;
+    }
+
+    const source = value as Partial<Record<"id" | "en", unknown>>;
+    const normalized: Partial<Record<"id" | "en", string>> = {};
+
+    if (typeof source.id === "string") {
+        normalized.id = source.id;
+    }
+    if (typeof source.en === "string") {
+        normalized.en = source.en;
+    }
+
+    return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
 export function clampNormalizedRect(block: LayoutBlock): LayoutBlock {
     const x = clamp(toFiniteNumber(block.x), 0, 1);
     const y = clamp(toFiniteNumber(block.y), 0, 1);
@@ -183,6 +203,9 @@ export function validateLayout(layout: PageSideLayout): ValidationResult {
             validatedBlocks.push({
                 ...clamped,
                 content: clamped.content ?? "",
+                contentByLanguage: validateTextContentByLanguage(
+                    (clamped as { contentByLanguage?: unknown }).contentByLanguage,
+                ),
                 style: validateTextStyle(clamped.style),
                 linkUrl: validateBlockLinkUrl(clamped.linkUrl),
             });

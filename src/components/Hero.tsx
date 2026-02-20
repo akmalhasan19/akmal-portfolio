@@ -25,12 +25,13 @@ import {
   Vector3,
 } from 'three';
 import { Book3D, createBookAtom } from './Book3D';
-import { useSetAtom, useAtomValue } from 'jotai';
+import { useAtom, useSetAtom, useAtomValue } from 'jotai';
 import { CoffeeSteam } from './CoffeeSteam';
 
 import { useBookSideContent } from '@/lib/book-content/useBookSideTextures';
 import { useBookProfileImage } from '@/lib/book-content/useBookProfileImage';
 import { BOOK2_CENTER_SPREAD_PIVOT } from '@/lib/book-content/book2-constraints';
+import { languageAtom, type LanguageCode } from '@/lib/i18n/language';
 
 const caveat = Caveat({
   variable: '--font-caveat',
@@ -50,8 +51,6 @@ interface ModelProps {
   enableShadows?: boolean;
 }
 
-type LanguageCode = 'id' | 'en';
-
 interface HeroTranslations {
   lampStringMessage: string;
   portfolioLabel: string;
@@ -66,6 +65,10 @@ interface HeroTranslations {
   resumeModalOptionIdHint: string;
   resumeModalOptionEnHint: string;
   resumeModalClose: string;
+  resumeModalCollectionLabel: string;
+  resumeModalOpenPdfAction: string;
+  pageTitle: string;
+  pageDescription: string;
   loaderOptimizingDevice: string;
   loaderOpeningScene: string;
   loaderLoadingScene: string;
@@ -87,6 +90,10 @@ const HERO_TRANSLATIONS: Record<LanguageCode, HeroTranslations> = {
     resumeModalOptionIdHint: 'Versi lokal dengan konteks Indonesia.',
     resumeModalOptionEnHint: 'Version for international applications.',
     resumeModalClose: 'Tutup',
+    resumeModalCollectionLabel: 'Koleksi Perpustakaan Lama',
+    resumeModalOpenPdfAction: 'Unduh PDF',
+    pageTitle: 'Portofolio Akmal Hasan Mulyadi',
+    pageDescription: 'Portofolio interaktif 3D Akmal Hasan Mulyadi.',
     loaderOptimizingDevice: 'Optimasi Perangkat',
     loaderOpeningScene: 'Membuka Scene',
     loaderLoadingScene: 'Memuat Scene',
@@ -106,6 +113,10 @@ const HERO_TRANSLATIONS: Record<LanguageCode, HeroTranslations> = {
     resumeModalOptionIdHint: 'Localized version for Indonesian context.',
     resumeModalOptionEnHint: 'Version for international applications.',
     resumeModalClose: 'Close',
+    resumeModalCollectionLabel: 'Old Library Collection',
+    resumeModalOpenPdfAction: 'Download PDF',
+    pageTitle: 'Akmal Hasan Mulyadi Portfolio',
+    pageDescription: 'Interactive 3D portfolio of Akmal Hasan Mulyadi.',
     loaderOptimizingDevice: 'Optimizing Device',
     loaderOpeningScene: 'Opening Scene',
     loaderLoadingScene: 'Loading Scene',
@@ -1412,7 +1423,7 @@ export default function Hero() {
   const [loaderProgressPercent, setLoaderProgressPercent] = useState(0);
   const [showLoaderOverlay, setShowLoaderOverlay] = useState(true);
   const [revealStarted, setRevealStarted] = useState(false);
-  const [language, setLanguage] = useState<LanguageCode>('id');
+  const [language, setLanguage] = useAtom(languageAtom);
   const [resumeModalOpen, setResumeModalOpen] = useState(false);
 
   const profileResolved = resolvedProfileName !== null;
@@ -1421,6 +1432,18 @@ export default function Hero() {
     : SCENE_PROFILES.mobile;
   const isLowEndDevice = sceneProfile.name === 'mobile';
   const translatedText = HERO_TRANSLATIONS[language];
+
+  useEffect(() => {
+    if (typeof document === 'undefined') {
+      return;
+    }
+    document.documentElement.lang = language;
+    document.title = translatedText.pageTitle;
+    const descriptionMeta = document.querySelector('meta[name="description"]');
+    if (descriptionMeta) {
+      descriptionMeta.setAttribute('content', translatedText.pageDescription);
+    }
+  }, [language, translatedText.pageDescription, translatedText.pageTitle]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1736,6 +1759,7 @@ export default function Hero() {
     textureLoadRadius: sceneProfile.bookTextureLoadRadius,
     currentPage: currentBook1Page,
     enabled: true,
+    language,
   });
 
   // Dynamic content for Book 2
@@ -1746,6 +1770,7 @@ export default function Hero() {
     textureLoadRadius: sceneProfile.bookTextureLoadRadius,
     currentPage: currentBook2Page,
     enabled: sceneProfile.renderSecondBook,
+    language,
   });
 
   const book2ProfileImageUrl = useBookProfileImage({
@@ -1986,7 +2011,7 @@ export default function Hero() {
           <div className="relative w-full max-w-xl rounded-md border border-[#8a6a45]/55 bg-[linear-gradient(155deg,#251c14,#130f0d_58%,#1d1612)] p-6 shadow-[0_25px_70px_rgba(0,0,0,0.62)]">
             <div className="pointer-events-none absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent via-[#c7a575]/65 to-transparent" />
             <p className="text-[11px] uppercase tracking-[0.24em] text-[#d5bb94]/70">
-              Old Library Collection
+              {translatedText.resumeModalCollectionLabel}
             </p>
             <h2
               className="mt-2 text-3xl text-[#f2e3c7]"
@@ -2011,7 +2036,7 @@ export default function Hero() {
                   {translatedText.resumeModalOptionIdHint}
                 </div>
                 <div className="mt-3 text-[11px] uppercase tracking-[0.18em] text-[#e4c89d] group-hover:text-[#f9dbad]">
-                  Open PDF
+                  {translatedText.resumeModalOpenPdfAction}
                 </div>
               </button>
 
@@ -2027,7 +2052,7 @@ export default function Hero() {
                   {translatedText.resumeModalOptionEnHint}
                 </div>
                 <div className="mt-3 text-[11px] uppercase tracking-[0.18em] text-[#e4c89d] group-hover:text-[#f9dbad]">
-                  Open PDF
+                  {translatedText.resumeModalOpenPdfAction}
                 </div>
               </button>
             </div>

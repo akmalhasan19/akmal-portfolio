@@ -1,5 +1,6 @@
 import { useAtom, type PrimitiveAtom } from "jotai";
 import { pageAtom, pages } from "./Book3D";
+import { languageAtom, SHARED_TRANSLATIONS } from "@/lib/i18n/language";
 
 interface BookControllerProps {
     totalPages?: number;
@@ -8,6 +9,8 @@ interface BookControllerProps {
 
 export const BookController = ({ totalPages, bookAtom: externalAtom }: BookControllerProps) => {
     const [page, setPage] = useAtom(externalAtom ?? pageAtom);
+    const [language] = useAtom(languageAtom);
+    const t = SHARED_TRANSLATIONS[language];
     const pageStops = totalPages ?? pages.length + 1;
     const lastPageIndex = pageStops - 1;
 
@@ -19,11 +22,11 @@ export const BookController = ({ totalPages, bookAtom: externalAtom }: BookContr
                 onClick={() => setPage((current) => Math.max(0, current - 1))}
                 disabled={page === 0}
             >
-                Previous Page
+                {t.previousPage}
             </button>
 
             <span className="text-white font-mono flex items-center">
-                Page {page} / {lastPageIndex}
+                {t.pageLabel} {page} / {lastPageIndex}
             </span>
 
             <button
@@ -32,7 +35,7 @@ export const BookController = ({ totalPages, bookAtom: externalAtom }: BookContr
                 onClick={() => setPage((current) => Math.min(lastPageIndex, current + 1))}
                 disabled={page === lastPageIndex}
             >
-                Next Page
+                {t.nextPage}
             </button>
         </div>
     );

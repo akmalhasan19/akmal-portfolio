@@ -23,7 +23,7 @@ void main() {
 
   // Calculate life progress (0.0 to 1.0) based on time and offset
   // We use uTime and aOffset to create a continuous loop
-  float lifeDuration = 8.0; // Faster (but still slow) to correct "static" look
+  float lifeDuration = 12.0;
   float time = uTime + aOffset;
   float progress = mod(time, lifeDuration) / lifeDuration;
   
@@ -42,20 +42,20 @@ void main() {
   pos.z += sin(randomAngle) * randomRadius;
   
   // Upward movement
-  pos.y += progress * 1.8; // Rise height
+  pos.y += progress * 1.4;
   
   // S-Curve distortion for "swirl"
-  float sway = sin(progress * 10.0 + aOffset) * 0.1 * progress;
+  float sway = sin(progress * 7.0 + aOffset) * 0.07 * progress;
   pos.x += sway;
   
   // Outward expansion (diffusion)
-  float expansion = progress * 0.5; // How wide it gets
+  float expansion = progress * 0.35;
   pos.x += (aVelocity.x * expansion);
   pos.z += (aVelocity.z * expansion);
   
   // Scale increases with age
   // Elongate vertically for "streak" look
-  float currentScaleX = aScale * (0.5 + progress * 1.0); 
+  float currentScaleX = aScale * (0.45 + progress * 0.8);
   float currentScaleY = currentScaleX * 2.0; // Taller than wide
   
   // Billboard Logic
@@ -116,7 +116,7 @@ float fbm(vec2 x) {
 	vec2 shift = vec2(100.0);
 	// Basic rotation matrix
     mat2 rot = mat2(cos(0.5), sin(0.5), -sin(0.5), cos(0.50));
-	for (int i = 0; i < 3; ++i) { // 3 Octaves
+  for (int i = 0; i < 2; ++i) {
 		v += a * snoise(x);
 		x = rot * x * 2.0 + shift;
 		a *= 0.5;
@@ -129,14 +129,14 @@ void main() {
   vec2 uv = vUv;
   
   // Time offset from particle distinct offset
-  float time = uTime * 0.5 + vOffset;
+  float time = uTime * 0.35 + vOffset;
   
   // Rising coordinates
   vec2 noiseUV = uv * vec2(1.0, 2.0) - vec2(0.0, time);
   
   // FBM Noise pattern
   // Multiply by high frequency to get "wispy strands"
-  float noise = fbm(noiseUV * 3.0);
+  float noise = fbm(noiseUV * 2.4);
   
   // Remap noise
   noise = noise * 0.5 + 0.5;
@@ -155,12 +155,12 @@ void main() {
   // Combine all
   // High contrast on noise to make "strands" pop out from transparent background
   // Increase threshold to thin out the smoke (only hottest parts visible)
-  float smokeShape = smoothstep(0.45, 1.0, noise * maskX); // Removed maskY here to apply it linearly
+  float smokeShape = smoothstep(0.52, 1.0, noise * maskX);
   
   // modulate alpha
   // Apply fading maskY here
   // Ultra subtle opacity
-  float finalAlpha = smokeShape * vAlpha * maskY * 0.08; 
+  float finalAlpha = smokeShape * vAlpha * maskY * 0.05;
   
   if (finalAlpha < 0.001) discard;
   
@@ -168,7 +168,7 @@ void main() {
 }
 `;
 
-const PARTICLE_COUNT = 25; // Fewer particles, but more detailed individually
+const PARTICLE_COUNT = 16;
 const pseudoRandom01 = (seed: number): number => {
   const x = Math.sin(seed * 12.9898 + 78.233) * 43758.5453123;
   return x - Math.floor(x);
@@ -199,12 +199,12 @@ export const CoffeeSteam = (props: ThreeElements["group"]) => {
       const r4 = pseudoRandom01(i * 4 + 4);
       const r5 = pseudoRandom01(i * 4 + 5);
 
-      offsets[i] = r1 * 4.0;
-      scales[i] = 0.6 + r2 * 0.4; // Smaller base scale
+      offsets[i] = r1 * 6.0;
+      scales[i] = 0.45 + r2 * 0.3;
       rotations[i] = r3;
 
       const angle = r4 * Math.PI * 2;
-      const speed = 0.1 + r5 * 0.2;
+      const speed = 0.06 + r5 * 0.12;
       velocities[i * 3] = Math.cos(angle) * speed;
       velocities[i * 3 + 1] = 0.0;
       velocities[i * 3 + 2] = Math.sin(angle) * speed;

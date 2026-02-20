@@ -1,6 +1,7 @@
 "use client";
 
 import { useAtom, useAtomValue } from "jotai";
+import { useState } from "react";
 import {
     nudgeStepAtom,
     selectedBlockIdAtom,
@@ -22,6 +23,7 @@ import {
     applyVisualCropToAspectRatio,
     deriveVisualCropBaseAspectRatio,
 } from "@/lib/book-content/visual-crop";
+import type { LanguageCode } from "@/lib/i18n/language";
 
 interface BlockInspectorProps {
     layout: PageSideLayout;
@@ -139,6 +141,21 @@ function applyListTypeToContent(content: string, listType: TextListType): string
         .join("\n");
 }
 
+function resolveTextContentByLanguage(
+    block: TextBlock,
+    language: LanguageCode,
+): string {
+    const localized = block.contentByLanguage;
+    if (!localized) {
+        return block.content;
+    }
+
+    if (language === "en") {
+        return localized.en ?? localized.id ?? block.content;
+    }
+    return localized.id ?? block.content;
+}
+
 function isResumeButtonSvg(svgCode: string): boolean {
     const source = typeof svgCode === "string" ? svgCode : "";
     if (!source) {
@@ -248,6 +265,7 @@ export function BlockInspector({
     onLayoutChange,
 }: BlockInspectorProps) {
     const [moveStep, setMoveStep] = useAtom(nudgeStepAtom);
+    const [contentLanguage, setContentLanguage] = useState<LanguageCode>("id");
     const selectedBlockIds = useAtomValue(selectedBlockIdsAtom);
     const selectedBlockId = useAtomValue(selectedBlockIdAtom);
     const selectedBlocks = layout.blocks.filter((b) => selectedBlockIds.includes(b.id));
@@ -311,13 +329,53 @@ export function BlockInspector({
                     return block;
                 }
 
+                const activeContent = resolveTextContentByLanguage(block, contentLanguage);
+                const nextActiveContent = applyListTypeToContent(activeContent, listType);
+                const nextContentByLanguage = {
+                    ...(block.contentByLanguage ?? {}),
+                    [contentLanguage]: nextActiveContent,
+                };
+                const nextLegacyContent = contentLanguage === "id"
+                    ? nextActiveContent
+                    : (nextContentByLanguage.id ?? block.content);
+
                 return {
                     ...block,
-                    content: applyListTypeToContent(block.content, listType),
+                    content: nextLegacyContent,
+                    contentByLanguage: nextContentByLanguage,
                     style: {
                         ...block.style,
                         listType,
                     },
+                };
+            }),
+        }));
+    };
+
+    const updateTextContent = (
+        blockId: string,
+        language: LanguageCode,
+        content: string,
+    ) => {
+        onLayoutChange((prev) => ({
+            ...prev,
+            blocks: prev.blocks.map((block) => {
+                if (block.id !== blockId || block.type !== "text") {
+                    return block;
+                }
+
+                const nextContentByLanguage = {
+                    ...(block.contentByLanguage ?? {}),
+                    [language]: content,
+                };
+                const nextLegacyContent = language === "id"
+                    ? content
+                    : (nextContentByLanguage.id ?? block.content);
+
+                return {
+                    ...block,
+                    content: nextLegacyContent,
+                    contentByLanguage: nextContentByLanguage,
                 };
             }),
         }));
@@ -357,7 +415,7 @@ export function BlockInspector({
             const clearedLine = currentLine.replace(LIST_PREFIX_PATTERN, "");
             const nextContent = `${value.slice(0, lineRange.start)}${clearedLine}${value.slice(lineRange.end)}`;
             const nextCursorPos = lineRange.start + clearedLine.length;
-            updateBlock(selectedBlock.id, { content: nextContent });
+            updateTextContent(selectedBlock.id, contentLanguage, nextContent);
             requestAnimationFrame(() => {
                 target.selectionStart = nextCursorPos;
                 target.selectionEnd = nextCursorPos;
@@ -372,12 +430,16 @@ export function BlockInspector({
         const nextContent = `${value.slice(0, selectionStart)}${insertion}${value.slice(selectionEnd)}`;
         const nextCursorPos = selectionStart + insertion.length;
 
-        updateBlock(selectedBlock.id, { content: nextContent });
+        updateTextContent(selectedBlock.id, contentLanguage, nextContent);
         requestAnimationFrame(() => {
             target.selectionStart = nextCursorPos;
             target.selectionEnd = nextCursorPos;
         });
     };
+
+    const selectedTextContent = selectedBlock?.type === "text"
+        ? resolveTextContentByLanguage(selectedBlock, contentLanguage)
+        : "";
 
     const updateResumeTypography = (
         block: Extract<LayoutBlock, { type: "svg" }>,
@@ -906,11 +968,32 @@ export function BlockInspector({
             {selectedBlock.type === "text" && (
                 <>
                     <div className="space-y-1">
+                        <div className="grid grid-cols-2 gap-2">
+                            <div className="space-y-0.5">
+                                <label className="text-[10px] uppercase text-neutral-600">
+                                    Bahasa Konten
+                                </label>
+                                <select
+                                    value={contentLanguage}
+                                    onChange={(e) =>
+                                        setContentLanguage(e.target.value as LanguageCode)
+                                    }
+                                    className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs outline-none focus:border-amber-500"
+                                >
+                                    <option value="id">Indonesia (ID)</option>
+                                    <option value="en">English (EN)</option>
+                                </select>
+                            </div>
+                        </div>
                         <label className="text-xs text-neutral-500">Konten</label>
                         <textarea
-                            value={selectedBlock.content}
+                            value={selectedTextContent}
                             onChange={(e) =>
-                                updateBlock(selectedBlock.id, { content: e.target.value })
+                                updateTextContent(
+                                    selectedBlock.id,
+                                    contentLanguage,
+                                    e.target.value,
+                                )
                             }
                             onKeyDown={handleTextContentKeyDown}
                             rows={3}

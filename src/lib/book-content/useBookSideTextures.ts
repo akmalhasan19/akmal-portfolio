@@ -14,6 +14,7 @@ import { computeSafeArea } from "./padding";
 import { CANVAS_RENDERER_VERSION, renderPageSideToCanvas } from "./render-canvas";
 import { svgToDataUrl } from "./svg-utils";
 import { validateLayout } from "./validation";
+import type { LanguageCode } from "@/lib/i18n/language";
 
 export type DynamicTextureMap = Record<string, CanvasTexture>;
 const RESUME_BUTTON_MARKER = /data-block-role\s*=\s*["']resume-button["']/i;
@@ -27,6 +28,7 @@ interface UseBookSideTexturesOptions {
     textureLoadRadius?: number;
     currentPage?: number;
     enabled?: boolean;
+    language?: LanguageCode;
 }
 
 interface UseBookSideContentResult {
@@ -145,6 +147,7 @@ export function useBookSideContent({
     textureLoadRadius = Number.POSITIVE_INFINITY,
     currentPage = 0,
     enabled = true,
+    language = "id",
 }: UseBookSideTexturesOptions): UseBookSideContentResult {
     const [textures, setTextures] = useState<DynamicTextureMap>({});
     const [linkRegions, setLinkRegions] = useState<LinkRegionMap>({});
@@ -266,7 +269,7 @@ export function useBookSideContent({
                 fetchedKeys.add(key);
 
                 const { layout: validatedLayout } = validateLayout(row.layout);
-                const hash = layoutHash(validatedLayout, canvasWidth, canvasHeight);
+                const hash = `${layoutHash(validatedLayout, canvasWidth, canvasHeight)}:${language}`;
 
                 linkRegionCacheRef.current.set(
                     key,
@@ -278,7 +281,7 @@ export function useBookSideContent({
                 }
 
                 renderPromises.push(
-                    renderPageSideToCanvas(validatedLayout, canvasWidth, canvasHeight)
+                    renderPageSideToCanvas(validatedLayout, canvasWidth, canvasHeight, language)
                         .then((canvas) => {
                             if (cancelled) {
                                 return;
@@ -358,6 +361,7 @@ export function useBookSideContent({
         textureLoadRadius,
         currentPage,
         enabled,
+        language,
         refreshToken,
     ]);
 

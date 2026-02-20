@@ -78,6 +78,8 @@ export interface TextBlock extends BlockBase {
     type: "text";
     /** Multi-line text content. */
     content: string;
+    /** Optional per-language text content overrides. */
+    contentByLanguage?: Partial<Record<"id" | "en", string>>;
     style: TextStyleConfig;
 }
 

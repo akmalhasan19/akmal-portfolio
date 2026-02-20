@@ -20,6 +20,8 @@ const MAX_IMAGE_CACHE_ENTRIES = 96;
 const SVG_RASTER_BASE_WIDTH = 1024;
 const resolvedFontFamilyCache = new Map<string, string>();
 
+type RenderLanguageCode = "id" | "en";
+
 interface LoadedVisualSource {
     source: CanvasImageSource;
     width: number;
@@ -103,6 +105,21 @@ function parseListLine(paragraph: string): ParsedListLine | null {
         marker: match[1],
         content: match[2] ?? "",
     };
+}
+
+function resolveTextContentByLanguage(
+    block: TextBlock,
+    language: RenderLanguageCode,
+): string {
+    const localized = block.contentByLanguage;
+    if (!localized) {
+        return block.content;
+    }
+
+    if (language === "en") {
+        return localized.en ?? localized.id ?? block.content;
+    }
+    return localized.id ?? block.content;
 }
 
 function splitTokenByWidth(
@@ -300,6 +317,7 @@ function drawTextBlock(
     safeW: number,
     safeH: number,
     fontScale: number,
+    language: RenderLanguageCode,
 ) {
     const x = safeX + block.x * safeW;
     const y = safeY + block.y * safeH;
@@ -321,9 +339,10 @@ function drawTextBlock(
     ctx.textBaseline = "top";
 
     const linePixelHeight = effectiveFontSize * lineHeight;
+    const textContent = resolveTextContentByLanguage(block, language);
     const listType = block.style.listType ?? "none";
     if (listType !== "none") {
-        const paragraphs = block.content.split("\n");
+        const paragraphs = textContent.split("\n");
         const markerGapWidth = Math.max(
             LIST_MARKER_FALLBACK_GAP_PX,
             ctx.measureText(" ").width,
@@ -384,7 +403,7 @@ function drawTextBlock(
             }
         }
     } else {
-        const wrappedLines = wrapTextDetailed(ctx, block.content, w);
+        const wrappedLines = wrapTextDetailed(ctx, textContent, w);
         drawTextLines(ctx, wrappedLines, textAlign, x, y, w, h, linePixelHeight);
     }
     ctx.restore();
@@ -741,6 +760,7 @@ export async function renderPageSideToCanvas(
     layout: PageSideLayout,
     canvasWidth: number,
     canvasHeight: number,
+    language: RenderLanguageCode = "id",
 ): Promise<HTMLCanvasElement> {
     const canvas = document.createElement("canvas");
     canvas.width = canvasWidth;
@@ -818,7 +838,7 @@ export async function renderPageSideToCanvas(
     for (const block of sortedBlocks) {
         try {
             if (block.type === "text") {
-                drawTextBlock(ctx, block, safe.x, safe.y, safe.w, safe.h, scaleY);
+                drawTextBlock(ctx, block, safe.x, safe.y, safe.w, safe.h, scaleY, language);
             } else if (block.type === "image") {
                 const img = loadedImages.get(block.id);
                 if (img) {
