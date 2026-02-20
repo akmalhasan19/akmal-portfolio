@@ -28,7 +28,7 @@ import { Book3D, createBookAtom } from './Book3D';
 import { useSetAtom, useAtomValue } from 'jotai';
 import { CoffeeSteam } from './CoffeeSteam';
 
-import { useBookSideContent, useBookSideTextures } from '@/lib/book-content/useBookSideTextures';
+import { useBookSideContent } from '@/lib/book-content/useBookSideTextures';
 import { useBookProfileImage } from '@/lib/book-content/useBookProfileImage';
 import { BOOK2_CENTER_SPREAD_PIVOT } from '@/lib/book-content/book2-constraints';
 
@@ -59,6 +59,13 @@ interface HeroTranslations {
   backButton: string;
   languageLabel: string;
   languageToggleHint: string;
+  resumeModalTitle: string;
+  resumeModalSubtitle: string;
+  resumeModalOptionId: string;
+  resumeModalOptionEn: string;
+  resumeModalOptionIdHint: string;
+  resumeModalOptionEnHint: string;
+  resumeModalClose: string;
   loaderOptimizingDevice: string;
   loaderOpeningScene: string;
   loaderLoadingScene: string;
@@ -73,6 +80,13 @@ const HERO_TRANSLATIONS: Record<LanguageCode, HeroTranslations> = {
     backButton: 'Kembali',
     languageLabel: 'Bahasa',
     languageToggleHint: 'Klik untuk ganti ke',
+    resumeModalTitle: 'Arsip Resume',
+    resumeModalSubtitle: 'Pilih bahasa resume yang ingin kamu lihat.',
+    resumeModalOptionId: 'Bahasa Indonesia',
+    resumeModalOptionEn: 'Bahasa Inggris',
+    resumeModalOptionIdHint: 'Versi lokal dengan konteks Indonesia.',
+    resumeModalOptionEnHint: 'Version for international applications.',
+    resumeModalClose: 'Tutup',
     loaderOptimizingDevice: 'Optimasi Perangkat',
     loaderOpeningScene: 'Membuka Scene',
     loaderLoadingScene: 'Memuat Scene',
@@ -85,10 +99,28 @@ const HERO_TRANSLATIONS: Record<LanguageCode, HeroTranslations> = {
     backButton: 'Back',
     languageLabel: 'Language',
     languageToggleHint: 'Click to switch to',
+    resumeModalTitle: 'Resume Archive',
+    resumeModalSubtitle: 'Choose which language version you want to open.',
+    resumeModalOptionId: 'Indonesian',
+    resumeModalOptionEn: 'English',
+    resumeModalOptionIdHint: 'Localized version for Indonesian context.',
+    resumeModalOptionEnHint: 'Version for international applications.',
+    resumeModalClose: 'Close',
     loaderOptimizingDevice: 'Optimizing Device',
     loaderOpeningScene: 'Opening Scene',
     loaderLoadingScene: 'Loading Scene',
     loaderPreparingScene: 'Preparing Scene',
+  },
+};
+
+const RESUME_VARIANTS: Record<LanguageCode, { href: string; fileName: string }> = {
+  id: {
+    href: '/resume/akmal-resume-id.pdf',
+    fileName: 'Akmal-Resume-ID.pdf',
+  },
+  en: {
+    href: '/resume/akmal-resume-en.pdf',
+    fileName: 'Akmal-Resume-EN.pdf',
   },
 };
 
@@ -392,9 +424,9 @@ const setGroupTransform = (group: Group, transform: BookSlotTransform) => {
 const OVERVIEW_CAMERA_POSITION = new Vector3(2.2, 1.0, 3.8);
 const OVERVIEW_CAMERA_TARGET = new Vector3(0, 0.2, -0.2);
 
-// Book-focus camera: above the book, rotated 180° (looking from behind desk)
-const BOOK_FOCUS_CAMERA_POSITION = new Vector3(0.3, 1.8, -0.4);
-const BOOK_FOCUS_CAMERA_TARGET = new Vector3(0.3, -0.05, 0.05);
+// Book-focus camera: slightly closer for better text readability, but not too tight.
+const BOOK_FOCUS_CAMERA_POSITION = new Vector3(0.3, 1.52, -0.26);
+const BOOK_FOCUS_CAMERA_TARGET = new Vector3(0.3, -0.07, 0.06);
 
 // Spiral arc pivot — the book position in XZ, used as center of the orbit
 const ARC_PIVOT_X = 0.3;
@@ -1070,13 +1102,14 @@ interface InteractiveBooksProps {
   book3Pages: Array<{ front: string; back: string }>;
   book4Pages: Array<{ front: string; back: string }>;
   book5Pages: Array<{ front: string; back: string }>;
-  book1DynamicContent: ReturnType<typeof useBookSideTextures>;
+  book1DynamicContent: ReturnType<typeof useBookSideContent>;
   book2DynamicContent: ReturnType<typeof useBookSideContent>;
   book2ProfileImageUrl: string | null;
   bookFocused: boolean;
   portfolioLabel: string;
   aboutLabel: string;
   onBookFocus: () => void;
+  onResumeBlockClick: () => void;
 }
 
 function InteractiveBooks({
@@ -1099,6 +1132,7 @@ function InteractiveBooks({
   portfolioLabel,
   aboutLabel,
   onBookFocus,
+  onResumeBlockClick,
   spotlightBook,
   onSpotlightChange,
 }: InteractiveBooksProps & {
@@ -1124,7 +1158,7 @@ function InteractiveBooks({
   const isBook2Focused = bookFocused && spotlightBook === 'book2';
   const book2LockedMinPage = isBook2Focused ? book2CenterSpreadPivot : 0;
   const book2LockedMaxPage = isBook2Focused
-    ? book2CenterSpreadPivot
+    ? book2CenterSpreadPivot + 1
     : Number.POSITIVE_INFINITY;
 
   const getSlotForBook = useCallback(
@@ -1254,7 +1288,8 @@ function InteractiveBooks({
           enableShadows={enableShadows}
           textureLoadRadius={textureLoadRadius}
           contentEnabled={true}
-          dynamicContent={book1DynamicContent}
+          dynamicContent={book1DynamicContent.textures}
+          dynamicLinkRegions={book1DynamicContent.linkRegions}
           onBookClick={() => handleBookClick('book1')}
           interactionDisabled={isSwapping || (bookFocused && spotlightBook !== 'book1')}
           onThicknessChange={setBook1Thickness}
@@ -1287,7 +1322,8 @@ function InteractiveBooks({
             frontCoverAvatarUrl={book2ProfileImageUrl ?? undefined}
             largeBookFanSpreadDeg={8}
             onBookClick={() => handleBookClick('book2')}
-            interactionDisabled={isSwapping || (bookFocused && spotlightBook === 'book2')}
+            onResumeLinkClick={onResumeBlockClick}
+            interactionDisabled={isSwapping || (bookFocused && spotlightBook !== 'book2')}
             onThicknessChange={setBook2Thickness}
             pageSegments={PRIMARY_BOOK_PAGE_SEGMENTS}
             minPage={book2LockedMinPage}
@@ -1377,6 +1413,7 @@ export default function Hero() {
   const [showLoaderOverlay, setShowLoaderOverlay] = useState(true);
   const [revealStarted, setRevealStarted] = useState(false);
   const [language, setLanguage] = useState<LanguageCode>('id');
+  const [resumeModalOpen, setResumeModalOpen] = useState(false);
 
   const profileResolved = resolvedProfileName !== null;
   const sceneProfile = profileResolved
@@ -1610,6 +1647,46 @@ export default function Hero() {
     setLanguage((prev) => (prev === 'id' ? 'en' : 'id'));
   }, []);
 
+  const handleOpenResumeModal = useCallback(() => {
+    setResumeModalOpen(true);
+  }, []);
+
+  const handleCloseResumeModal = useCallback(() => {
+    setResumeModalOpen(false);
+  }, []);
+
+  const handleResumeVariantClick = useCallback((targetLanguage: LanguageCode) => {
+    const variant = RESUME_VARIANTS[targetLanguage];
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const anchor = document.createElement('a');
+    anchor.href = variant.href;
+    anchor.target = '_blank';
+    anchor.rel = 'noopener noreferrer';
+    anchor.download = variant.fileName;
+    anchor.click();
+    setResumeModalOpen(false);
+  }, []);
+
+  useEffect(() => {
+    if (!resumeModalOpen) {
+      return;
+    }
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setResumeModalOpen(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleEscape);
+    return () => {
+      window.removeEventListener('keydown', handleEscape);
+    };
+  }, [resumeModalOpen]);
+
   const book1Pages = useMemo(
     () => createBlankBookInteriorPages(BOOK1_INTERIOR_SHEET_COUNT),
     [],
@@ -1632,7 +1709,7 @@ export default function Hero() {
   );
 
   // Dynamic content for Book 1
-  const book1DynamicContent = useBookSideTextures({
+  const book1DynamicContent = useBookSideContent({
     bookKey: "book-1",
     totalPageEntries: book1Pages.length + 2, // interior sheets + 2 covers
     canvasHeight: isLowEndDevice ? BOOK_DYNAMIC_CANVAS_HEIGHT_MOBILE : BOOK_DYNAMIC_CANVAS_HEIGHT_DESKTOP,
@@ -1765,6 +1842,7 @@ export default function Hero() {
                 portfolioLabel={translatedText.portfolioLabel}
                 aboutLabel={translatedText.aboutLabel}
                 onBookFocus={handleBookFocus}
+                onResumeBlockClick={handleOpenResumeModal}
                 spotlightBook={spotlightBook}
                 onSpotlightChange={setSpotlightBook}
               />
@@ -1871,6 +1949,81 @@ export default function Hero() {
           </group>
         )}
       </Canvas>
+
+      {resumeModalOpen && (
+        <div
+          className="absolute inset-0 z-30 flex items-center justify-center px-4 py-8"
+          role="dialog"
+          aria-modal="true"
+          aria-label={translatedText.resumeModalTitle}
+        >
+          <button
+            type="button"
+            aria-label={translatedText.resumeModalClose}
+            className="absolute inset-0 bg-[radial-gradient(circle_at_20%_15%,rgba(147,112,73,0.22),rgba(7,7,7,0.94)_62%)] backdrop-blur-[1.5px]"
+            onClick={handleCloseResumeModal}
+          />
+          <div className="relative w-full max-w-xl rounded-md border border-[#8a6a45]/55 bg-[linear-gradient(155deg,#251c14,#130f0d_58%,#1d1612)] p-6 shadow-[0_25px_70px_rgba(0,0,0,0.62)]">
+            <div className="pointer-events-none absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent via-[#c7a575]/65 to-transparent" />
+            <p className="text-[11px] uppercase tracking-[0.24em] text-[#d5bb94]/70">
+              Old Library Collection
+            </p>
+            <h2
+              className="mt-2 text-3xl text-[#f2e3c7]"
+              style={{ fontFamily: 'var(--font-caveat), "Caveat", cursive' }}
+            >
+              {translatedText.resumeModalTitle}
+            </h2>
+            <p className="mt-1 text-sm text-[#d8c3a1]/80">
+              {translatedText.resumeModalSubtitle}
+            </p>
+
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => handleResumeVariantClick('id')}
+                className="group rounded-md border border-[#9a7a54]/60 bg-[#211912]/80 p-4 text-left transition hover:border-[#d2b183] hover:bg-[#2d2218]"
+              >
+                <div className="text-base font-semibold text-[#f4e2c3]">
+                  {translatedText.resumeModalOptionId}
+                </div>
+                <div className="mt-1 text-xs text-[#cbb08a]">
+                  {translatedText.resumeModalOptionIdHint}
+                </div>
+                <div className="mt-3 text-[11px] uppercase tracking-[0.18em] text-[#e4c89d] group-hover:text-[#f9dbad]">
+                  Open PDF
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleResumeVariantClick('en')}
+                className="group rounded-md border border-[#9a7a54]/60 bg-[#211912]/80 p-4 text-left transition hover:border-[#d2b183] hover:bg-[#2d2218]"
+              >
+                <div className="text-base font-semibold text-[#f4e2c3]">
+                  {translatedText.resumeModalOptionEn}
+                </div>
+                <div className="mt-1 text-xs text-[#cbb08a]">
+                  {translatedText.resumeModalOptionEnHint}
+                </div>
+                <div className="mt-3 text-[11px] uppercase tracking-[0.18em] text-[#e4c89d] group-hover:text-[#f9dbad]">
+                  Open PDF
+                </div>
+              </button>
+            </div>
+
+            <div className="mt-6 flex justify-end">
+              <button
+                type="button"
+                onClick={handleCloseResumeModal}
+                className="rounded border border-[#8f7050] px-3 py-1.5 text-xs uppercase tracking-[0.16em] text-[#e6ccab] transition hover:border-[#c7a173] hover:text-[#f2dec1]"
+              >
+                {translatedText.resumeModalClose}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showLoaderOverlay && (
         <div

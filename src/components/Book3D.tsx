@@ -8,6 +8,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bone,
   BoxGeometry,
+  CanvasTexture,
   ClampToEdgeWrapping,
   Color,
   CylinderGeometry,
@@ -23,9 +24,11 @@ import {
   Vector3,
 } from "three";
 import { pageSideKey } from "@/types/book-content";
+import { normalizeAspectRatio } from "@/lib/book-content/aspect-ratio";
 import { openExternalLink, sanitizeLinkUrl } from "@/lib/book-content/links";
+import { getVisualCropSourceRect } from "@/lib/book-content/visual-crop";
 import type { DynamicTextureMap } from "@/lib/book-content/useBookSideTextures";
-import type { LinkRegionMap } from "@/types/book-content";
+import type { LinkHitRegion, LinkRegionMap } from "@/types/book-content";
 
 const easingFactor = 0.5;
 const easingFactorFold = 0.3;
@@ -67,10 +70,32 @@ const ACTIVE_PAGE_LIFT_Z = 0.0065;
 const ACTIVE_PAGE_LIFT_Y = 0.0028;
 
 const whiteColor = new Color("white");
-const emissiveColor = new Color("orange");
+const emissiveColor = new Color("#f5f5f5");
+const HOVER_MASK_TEXTURE_SIZE = 1024;
+const SVG_HIT_MASK_MAX_SIZE = 256;
+const SVG_HIT_MASK_MIN_SIZE = 40;
+const SVG_HIT_ALPHA_THRESHOLD = 12;
+const svgHoverImagePromiseCache = new Map<string, Promise<HTMLImageElement>>();
 const paperFaceColor = new Color("#ece0c5");
 const paperEdgeColor = new Color("#e1cfaa");
 const defaultCoverBoardColor = new Color("#9a3727");
+
+function loadSvgHoverImage(dataUrl: string): Promise<HTMLImageElement> {
+  const cached = svgHoverImagePromiseCache.get(dataUrl);
+  if (cached) {
+    return cached;
+  }
+
+  const promise = new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Failed to load SVG hover image."));
+    image.src = dataUrl;
+  });
+
+  svgHoverImagePromiseCache.set(dataUrl, promise);
+  return promise;
+}
 const defaultCoverBoardDarkColor = new Color("#74261a");
 const coverConnectorColor = new Color("#4a170f");
 const pageSideMaterials: MeshStandardMaterial[] = [
@@ -441,6 +466,8 @@ interface PageProps extends GroupProps {
   largeBookFanSpreadDeg?: number;
   /** Optional click interceptor from parent scene. Return true to consume click. */
   onBookClick?: () => boolean;
+  /** Optional callback when a resume block is clicked. */
+  onResumeLinkClick?: () => void;
   /** Disable page interactions while parent runs scene-level animation. */
   interactionDisabled?: boolean;
   /** Number of bone segments per page. Lower = cheaper animation. */
@@ -449,6 +476,19 @@ interface PageProps extends GroupProps {
   minPage?: number;
   /** Maximum page number allowed to flip to manually. Default Infinity. */
   maxPage?: number;
+  /** Disable hover visual/cursor effects for specific page indices. */
+  hoverEffectsDisabledPages?: number[];
+}
+
+interface HoveredLinkRegion {
+  side: "front" | "back";
+  region: LinkHitRegion;
+}
+
+interface SvgHitMask {
+  width: number;
+  height: number;
+  alpha: Uint8ClampedArray;
 }
 
 const Page = ({
@@ -477,10 +517,12 @@ const Page = ({
   dynamicLinkRegions,
   largeBookFanSpreadDeg,
   onBookClick,
+  onResumeLinkClick,
   interactionDisabled = false,
   pageSegments = PAGE_SEGMENTS,
   minPage = 0,
   maxPage = Number.POSITIVE_INFINITY,
+  hoverEffectsDisabledPages,
 
   ...props
 }: PageProps) => {
@@ -591,8 +633,22 @@ const Page = ({
     y: 0,
     z: 0,
   });
+  const hoverMaskTextureRef = useRef<CanvasTexture | null>(null);
+  const svgHitMaskCacheRef = useRef<Map<string, SvgHitMask>>(new Map());
+  const svgHitMaskPendingRef = useRef<Map<string, Promise<void>>>(new Map());
   const [highlighted, setHighlighted] = useState(false);
+  const [hoveredLink, setHoveredLink] = useState<HoveredLinkRegion | null>(null);
   const setPage = useSetAtom(externalAtom ?? pageAtom);
+  const hasLinkRegionsOnSheet = useMemo(() => {
+    if (!contentEnabled || !dynamicLinkRegions) {
+      return false;
+    }
+
+    const frontRegions = dynamicLinkRegions[pageSideKey(number, "front")];
+    const backRegions = dynamicLinkRegions[pageSideKey(number, "back")];
+    return (frontRegions?.length ?? 0) > 0 || (backRegions?.length ?? 0) > 0;
+  }, [contentEnabled, dynamicLinkRegions, number]);
+  const hoverEffectsDisabled = Boolean(hoverEffectsDisabledPages?.includes(number));
 
   const customCoverColor = useMemo(() => coverColor ? new Color(coverColor) : defaultCoverBoardColor, [coverColor]);
   const customCoverDarkColor = useMemo(() => coverColor ? new Color(coverColor).multiplyScalar(0.7) : defaultCoverBoardDarkColor, [coverColor]);
@@ -715,7 +771,7 @@ const Page = ({
     enableShadows,
   ]);
 
-  useCursor(highlighted);
+  useCursor(!hoverEffectsDisabled && (highlighted || hoveredLink !== null));
 
   // Stack rank calculation updated to work with variable total pages
   const stackRank = isCoverPage
@@ -741,7 +797,299 @@ const Page = ({
   useEffect(() => {
     settledFrameCount.current = 0;
     idleRef.current = false;
-  }, [bookClosed, highlighted, opened, page, totalPages]);
+  }, [bookClosed, highlighted, hoveredLink, opened, page, totalPages]);
+
+  useEffect(() => {
+    if (interactionDisabled) {
+      setHighlighted(false);
+      setHoveredLink(null);
+    }
+  }, [interactionDisabled]);
+
+  const ensureHoverMaskTexture = useCallback(() => {
+    if (typeof document === "undefined") {
+      return null;
+    }
+
+    if (hoverMaskTextureRef.current) {
+      return hoverMaskTextureRef.current;
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = HOVER_MASK_TEXTURE_SIZE;
+    canvas.height = HOVER_MASK_TEXTURE_SIZE;
+
+    const texture = new CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    hoverMaskTextureRef.current = texture;
+    return texture;
+  }, []);
+
+  const drawLinkRegionShape = useCallback(
+    async (
+      ctx: CanvasRenderingContext2D,
+      region: LinkHitRegion,
+      x: number,
+      y: number,
+      w: number,
+      h: number,
+    ) => {
+      const shouldUseSvgShape = region.highlightShape === "svg" && Boolean(region.svgDataUrl);
+      if (!shouldUseSvgShape || !region.svgDataUrl) {
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(x, y, w, h);
+        return;
+      }
+
+      try {
+        const svgImage = await loadSvgHoverImage(region.svgDataUrl);
+        const sourceWidth = Math.max(1, svgImage.naturalWidth || svgImage.width);
+        const sourceHeight = Math.max(1, svgImage.naturalHeight || svgImage.height);
+        const source = getVisualCropSourceRect(sourceWidth, sourceHeight, region.crop);
+        const sourceAspect = normalizeAspectRatio(
+          region.aspectRatio,
+          source.width / source.height,
+        );
+        const blockAspect = w / h;
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(x, y, w, h);
+        ctx.clip();
+
+        if (region.objectFit === "contain") {
+          let targetW = w;
+          let targetH = h;
+          let targetX = x;
+          let targetY = y;
+
+          if (sourceAspect > blockAspect) {
+            targetH = w / sourceAspect;
+            targetY = y + (h - targetH) / 2;
+          } else {
+            targetW = h * sourceAspect;
+            targetX = x + (w - targetW) / 2;
+          }
+
+          ctx.drawImage(
+            svgImage,
+            source.x,
+            source.y,
+            source.width,
+            source.height,
+            targetX,
+            targetY,
+            targetW,
+            targetH,
+          );
+        } else {
+          let sx = source.x;
+          let sy = source.y;
+          let sW = source.width;
+          let sH = source.height;
+
+          if (sourceAspect > blockAspect) {
+            sW = source.height * blockAspect;
+            sx = source.x + (source.width - sW) / 2;
+          } else {
+            sH = source.width / blockAspect;
+            sy = source.y + (source.height - sH) / 2;
+          }
+
+          ctx.drawImage(svgImage, sx, sy, sW, sH, x, y, w, h);
+        }
+
+        ctx.restore();
+      } catch {
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(x, y, w, h);
+      }
+    },
+    [],
+  );
+
+  const getSvgMaskCacheKey = useCallback((region: LinkHitRegion) => {
+    const crop = region.crop ?? { left: 0, right: 0, top: 0, bottom: 0 };
+    return [
+      region.svgDataUrl || "",
+      region.objectFit || "cover",
+      String(region.aspectRatio ?? ""),
+      crop.left,
+      crop.right,
+      crop.top,
+      crop.bottom,
+      Math.round(region.w * 100000) / 100000,
+      Math.round(region.h * 100000) / 100000,
+    ].join("|");
+  }, []);
+
+  const ensureSvgHitMaskReady = useCallback((region: LinkHitRegion) => {
+    if (region.highlightShape !== "svg" || !region.svgDataUrl || typeof document === "undefined") {
+      return;
+    }
+
+    const key = getSvgMaskCacheKey(region);
+    if (svgHitMaskCacheRef.current.has(key) || svgHitMaskPendingRef.current.has(key)) {
+      return;
+    }
+
+    const regionAspect = region.w > 0 && region.h > 0 ? region.w / region.h : 1;
+    const canvasWidth = regionAspect >= 1
+      ? SVG_HIT_MASK_MAX_SIZE
+      : Math.max(SVG_HIT_MASK_MIN_SIZE, Math.round(SVG_HIT_MASK_MAX_SIZE * regionAspect));
+    const canvasHeight = regionAspect >= 1
+      ? Math.max(SVG_HIT_MASK_MIN_SIZE, Math.round(SVG_HIT_MASK_MAX_SIZE / regionAspect))
+      : SVG_HIT_MASK_MAX_SIZE;
+
+    const promise = (async () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = canvasWidth;
+      canvas.height = canvasHeight;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        return;
+      }
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      await drawLinkRegionShape(ctx, region, 0, 0, canvas.width, canvas.height);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      svgHitMaskCacheRef.current.set(key, {
+        width: canvas.width,
+        height: canvas.height,
+        alpha: imageData.data,
+      });
+    })()
+      .catch(() => {
+        // Ignore failed SVG hit-mask build.
+      })
+      .finally(() => {
+        svgHitMaskPendingRef.current.delete(key);
+      });
+
+    svgHitMaskPendingRef.current.set(key, promise);
+  }, [drawLinkRegionShape, getSvgMaskCacheKey]);
+
+  const isPointInsideSvgShape = useCallback(
+    (region: LinkHitRegion, localU: number, localV: number) => {
+      if (region.highlightShape !== "svg" || !region.svgDataUrl) {
+        return true;
+      }
+
+      const key = getSvgMaskCacheKey(region);
+      const mask = svgHitMaskCacheRef.current.get(key);
+      if (!mask) {
+        ensureSvgHitMaskReady(region);
+        return false;
+      }
+
+      const x = Math.min(mask.width - 1, Math.max(0, Math.floor(localU * mask.width)));
+      const y = Math.min(mask.height - 1, Math.max(0, Math.floor(localV * mask.height)));
+      const index = (y * mask.width + x) * 4 + 3;
+      return mask.alpha[index] >= SVG_HIT_ALPHA_THRESHOLD;
+    },
+    [ensureSvgHitMaskReady, getSvgMaskCacheKey],
+  );
+
+  const drawHoverMaskTexture = useCallback(async (region: LinkHitRegion | null) => {
+    const texture = ensureHoverMaskTexture();
+    if (!texture) {
+      return null;
+    }
+
+    const canvas = texture.image as HTMLCanvasElement;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      return null;
+    }
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (region) {
+      const x = Math.round(region.x * canvas.width);
+      const y = Math.round(region.y * canvas.height);
+      const w = Math.max(1, Math.round(region.w * canvas.width));
+      const h = Math.max(1, Math.round(region.h * canvas.height));
+      await drawLinkRegionShape(ctx, region, x, y, w, h);
+    }
+
+    texture.needsUpdate = true;
+    return texture;
+  }, [drawLinkRegionShape, ensureHoverMaskTexture]);
+
+  useEffect(() => {
+    if (!contentEnabled || !dynamicLinkRegions) {
+      return;
+    }
+
+    const frontRegions = dynamicLinkRegions[pageSideKey(number, "front")] ?? [];
+    const backRegions = dynamicLinkRegions[pageSideKey(number, "back")] ?? [];
+    for (const region of [...frontRegions, ...backRegions]) {
+      if (region.highlightShape === "svg" && region.svgDataUrl) {
+        ensureSvgHitMaskReady(region);
+      }
+    }
+  }, [contentEnabled, dynamicLinkRegions, ensureSvgHitMaskReady, number]);
+
+  useEffect(() => {
+    const svgHitMaskCache = svgHitMaskCacheRef.current;
+    const svgHitMaskPending = svgHitMaskPendingRef.current;
+    return () => {
+      if (hoverMaskTextureRef.current) {
+        hoverMaskTextureRef.current.dispose();
+        hoverMaskTextureRef.current = null;
+      }
+      svgHitMaskCache.clear();
+      svgHitMaskPending.clear();
+    };
+  }, []);
+
+  useEffect(() => {
+    const materials = skinnedMeshRef.current?.material as MeshStandardMaterial[] | undefined;
+    const frontMaterial = materials?.[4];
+    const backMaterial = materials?.[5];
+    if (!frontMaterial || !backMaterial) {
+      return;
+    }
+
+    if (!hoveredLink) {
+      if (frontMaterial.emissiveMap || backMaterial.emissiveMap) {
+        frontMaterial.emissiveMap = null;
+        backMaterial.emissiveMap = null;
+        frontMaterial.needsUpdate = true;
+        backMaterial.needsUpdate = true;
+      }
+      return;
+    }
+
+    // SVG hover maps can create visible artifacts on detailed icons/buttons.
+    // Keep interaction behavior, but avoid emissive map overlay for SVG regions.
+    if (hoveredLink.region.highlightShape === "svg") {
+      if (frontMaterial.emissiveMap || backMaterial.emissiveMap) {
+        frontMaterial.emissiveMap = null;
+        backMaterial.emissiveMap = null;
+        frontMaterial.needsUpdate = true;
+        backMaterial.needsUpdate = true;
+      }
+      return;
+    }
+
+    let cancelled = false;
+    const applyMask = async () => {
+      const maskTexture = await drawHoverMaskTexture(hoveredLink.region);
+      if (!maskTexture || cancelled) {
+        return;
+      }
+
+      frontMaterial.emissiveMap = hoveredLink.side === "front" ? maskTexture : null;
+      backMaterial.emissiveMap = hoveredLink.side === "back" ? maskTexture : null;
+      frontMaterial.needsUpdate = true;
+      backMaterial.needsUpdate = true;
+    };
+
+    void applyMask();
+    return () => {
+      cancelled = true;
+    };
+  }, [drawHoverMaskTexture, hoveredLink, manualSkinnedMesh]);
 
   useFrame((_, delta) => {
     if (!skinnedMeshRef.current || !group.current) {
@@ -755,12 +1103,26 @@ const Page = ({
 
 
     const materials = skinnedMeshRef.current.material as MeshStandardMaterial[];
-    const emissiveIntensity = highlighted ? 0.22 : 0;
-    if (materials[4] && (highlighted || materials[4].emissiveIntensity > 0.001)) {
-      materials[4].emissiveIntensity = MathUtils.lerp(materials[4].emissiveIntensity, emissiveIntensity, 0.1);
+    const wholePageHighlight = highlighted && !hasLinkRegionsOnSheet;
+    const svgRegionHovered = hoveredLink?.region.highlightShape === "svg";
+    const frontHighlighted = wholePageHighlight || (!svgRegionHovered && hoveredLink?.side === "front");
+    const backHighlighted = wholePageHighlight || (!svgRegionHovered && hoveredLink?.side === "back");
+    const frontEmissiveIntensity = frontHighlighted ? 0.38 : 0;
+    const backEmissiveIntensity = backHighlighted ? 0.38 : 0;
+
+    if (materials[4] && (frontHighlighted || materials[4].emissiveIntensity > 0.001)) {
+      materials[4].emissiveIntensity = MathUtils.lerp(
+        materials[4].emissiveIntensity,
+        frontEmissiveIntensity,
+        0.1,
+      );
     }
-    if (materials[5] && (highlighted || materials[5].emissiveIntensity > 0.001)) {
-      materials[5].emissiveIntensity = MathUtils.lerp(materials[5].emissiveIntensity, emissiveIntensity, 0.1);
+    if (materials[5] && (backHighlighted || materials[5].emissiveIntensity > 0.001)) {
+      materials[5].emissiveIntensity = MathUtils.lerp(
+        materials[5].emissiveIntensity,
+        backEmissiveIntensity,
+        0.1,
+      );
     }
 
     if (lastOpened.current !== opened) {
@@ -938,7 +1300,7 @@ const Page = ({
     };
 
     // Mark page as idle after it has been settled for many consecutive frames
-    if (!highlighted && turningTime <= 0.001 && frameDelta < 0.001) {
+    if (!highlighted && !hoveredLink && turningTime <= 0.001 && frameDelta < 0.001) {
       settledFrameCount.current += 1;
       if (settledFrameCount.current > 60) {
         idleRef.current = true;
@@ -948,55 +1310,125 @@ const Page = ({
     }
   });
 
-  const handleSkinnedMeshClick = useCallback(
-    (event: ThreeEvent<MouseEvent>) => {
-      if (interactionDisabled || !contentEnabled || !dynamicLinkRegions) {
-        return;
+  const getHitLinkRegion = useCallback(
+    (
+      uv: ThreeEvent<MouseEvent>["uv"],
+      materialIndex: number | undefined,
+    ): HoveredLinkRegion | null => {
+      if (!contentEnabled || !dynamicLinkRegions || !uv) {
+        return null;
       }
 
-      const uv = event.uv;
-      if (!uv) {
-        return;
-      }
-
-      const materialIndex = event.face?.materialIndex;
       const side = materialIndex === 4 ? "front" : materialIndex === 5 ? "back" : null;
       if (!side) {
-        return;
+        return null;
       }
 
       const regions = dynamicLinkRegions[pageSideKey(number, side)];
       if (!regions || regions.length === 0) {
-        return;
+        return null;
       }
 
       const hitU = uv.x;
       const hitV = 1 - uv.y;
-      const hitRegion = regions.find((region) =>
-        hitU >= region.x
-        && hitU <= region.x + region.w
-        && hitV >= region.y
-        && hitV <= region.y + region.h);
+      for (const region of regions) {
+        if (
+          hitU < region.x
+          || hitU > region.x + region.w
+          || hitV < region.y
+          || hitV > region.y + region.h
+        ) {
+          continue;
+        }
 
+        const safeRegionWidth = Math.max(region.w, Number.EPSILON);
+        const safeRegionHeight = Math.max(region.h, Number.EPSILON);
+        const localU = (hitU - region.x) / safeRegionWidth;
+        const localV = (hitV - region.y) / safeRegionHeight;
+
+        if (!isPointInsideSvgShape(region, localU, localV)) {
+          continue;
+        }
+
+        return { side, region };
+      }
+
+      return null;
+    },
+    [contentEnabled, dynamicLinkRegions, isPointInsideSvgShape, number],
+  );
+
+  const handleSkinnedMeshPointerMove = useCallback(
+    (event: ThreeEvent<PointerEvent>) => {
+      if (interactionDisabled || hoverEffectsDisabled || !hasLinkRegionsOnSheet) {
+        return;
+      }
+
+      // Stop propagation only when this page is actively handling link hover.
+      // This prevents behind-pages from receiving spurious pointerEnter events
+      // (bind-pose geometries overlap), while still allowing clicks and hover
+      // to fall through to the correct sheet when this one has no link regions.
+      event.stopPropagation();
+
+      const hitRegion = getHitLinkRegion(event.uv, event.face?.materialIndex);
+      if (!hitRegion) {
+        setHoveredLink((prev) => (prev ? null : prev));
+        return;
+      }
+
+      setHoveredLink((prev) => {
+        if (
+          prev
+          && prev.side === hitRegion.side
+          && prev.region.x === hitRegion.region.x
+          && prev.region.y === hitRegion.region.y
+          && prev.region.w === hitRegion.region.w
+          && prev.region.h === hitRegion.region.h
+          && prev.region.url === hitRegion.region.url
+        ) {
+          return prev;
+        }
+        return hitRegion;
+      });
+    },
+    [getHitLinkRegion, hasLinkRegionsOnSheet, hoverEffectsDisabled, interactionDisabled],
+  );
+
+  const handleSkinnedMeshClick = useCallback(
+    (event: ThreeEvent<MouseEvent>) => {
+      if (interactionDisabled) {
+        return;
+      }
+
+      const hitRegion = getHitLinkRegion(event.uv, event.face?.materialIndex);
       if (!hitRegion) {
         return;
       }
 
-      // Consume click so page flip does not trigger when user clicks a linked block.
+      // Consume click so page flip does not trigger when user clicks a linked block,
+      // and prevent the event from leaking to page meshes behind this one.
       event.stopPropagation();
-      if (!hitRegion.url) {
+      if (hitRegion.region.interactionType === "resume_modal") {
+        onResumeLinkClick?.();
+        setHighlighted(false);
+        setHoveredLink(null);
         return;
       }
 
-      const sanitized = sanitizeLinkUrl(hitRegion.url);
+      if (!hitRegion.region.url) {
+        return;
+      }
+
+      const sanitized = sanitizeLinkUrl(hitRegion.region.url);
       if (!sanitized) {
         return;
       }
 
       openExternalLink(sanitized);
       setHighlighted(false);
+      setHoveredLink(null);
     },
-    [contentEnabled, dynamicLinkRegions, interactionDisabled, number],
+    [getHitLinkRegion, interactionDisabled, onResumeLinkClick],
   );
 
   return (
@@ -1004,39 +1436,61 @@ const Page = ({
       {...props}
       ref={group}
       onPointerEnter={(event) => {
-        event.stopPropagation();
-        if (interactionDisabled) {
+        if (interactionDisabled || hoverEffectsDisabled) {
           return;
         }
-        setHighlighted(true);
+        // Don't consume event if clicking this page would go out of the allowed range.
+        // Letting the event propagate allows the correct overlapping sheet to handle it.
+        const targetPage = opened ? number : number + 1;
+        if (targetPage < minPage || targetPage > maxPage) {
+          return;
+        }
+        event.stopPropagation();
+        if (!hasLinkRegionsOnSheet) {
+          setHighlighted(true);
+        }
       }}
       onPointerLeave={(event) => {
         event.stopPropagation();
         setHighlighted(false);
+        setHoveredLink(null);
       }}
       onClick={(event) => {
-        event.stopPropagation();
         if (interactionDisabled) {
+          event.stopPropagation();
           setHighlighted(false);
+          setHoveredLink(null);
           return;
         }
         const clickHandledByParent = onBookClick?.() ?? false;
         if (clickHandledByParent) {
+          event.stopPropagation();
           setHighlighted(false);
+          setHoveredLink(null);
           return;
         }
+        // Only consume the click when this sheet can actually flip.
+        // If out of range, let the event propagate so an overlapping sheet
+        // (whose bind-pose geometry coincides) can handle the flip instead.
         const targetPage = opened ? number : number + 1;
         if (targetPage < minPage || targetPage > maxPage) {
-          setHighlighted(false);
           return;
         }
+        event.stopPropagation();
         setPage(targetPage);
         setHighlighted(false);
+        setHoveredLink(null);
       }}
     >
       <primitive
         object={manualSkinnedMesh}
         ref={skinnedMeshRef}
+        onPointerMove={handleSkinnedMeshPointerMove}
+        onPointerOut={() => {
+          if (hasLinkRegionsOnSheet) {
+            setHoveredLink(null);
+          }
+        }}
         onClick={handleSkinnedMeshClick}
         position-x={0}
         position-y={stackSettleY}
@@ -1086,7 +1540,10 @@ export interface Book3DProps extends GroupProps {
   largeBookFanSpreadDeg?: number;
   /** Optional click interceptor from parent scene. Return true to consume click. */
   onBookClick?: () => boolean;
-  /** Disable page interactions while parent runs scene-level animation. */  interactionDisabled?: boolean;
+  /** Optional callback when a resume block is clicked. */
+  onResumeLinkClick?: () => void;
+  /** Disable page interactions while parent runs scene-level animation. */
+  interactionDisabled?: boolean;
   /** Callback fired when book thickness (totalStackDepth) changes. */
   onThicknessChange?: (thickness: number) => void;
   /** Base connector offset for spine positioning: [x, y, z]. */
@@ -1099,6 +1556,8 @@ export interface Book3DProps extends GroupProps {
   maxPage?: number;
   /** Animate backward page navigation as chained flips instead of snapping. */
   chainBackwardTurns?: boolean;
+  /** Disable hover visual/cursor effects for specific page indices. */
+  hoverEffectsDisabledPages?: number[];
 
 }
 
@@ -1120,6 +1579,7 @@ export const Book3D = ({
   dynamicLinkRegions,
   largeBookFanSpreadDeg,
   onBookClick,
+  onResumeLinkClick,
   interactionDisabled = false,
   onThicknessChange,
   spineBaseOffset = [COVER_CONNECTOR_X_OFFSET, COVER_CONNECTOR_Y_OFFSET, COVER_CONNECTOR_Z_OFFSET],
@@ -1127,6 +1587,7 @@ export const Book3D = ({
   minPage = 0,
   maxPage = Number.POSITIVE_INFINITY,
   chainBackwardTurns = false,
+  hoverEffectsDisabledPages,
 
   ...props
 }: Book3DProps) => {
@@ -1359,10 +1820,12 @@ export const Book3D = ({
               dynamicLinkRegions={dynamicLinkRegions}
               largeBookFanSpreadDeg={largeBookFanSpreadDeg}
               onBookClick={onBookClick}
+              onResumeLinkClick={onResumeLinkClick}
               interactionDisabled={interactionDisabled}
               pageSegments={pageSegments}
               minPage={minPage}
               maxPage={maxPage}
+              hoverEffectsDisabledPages={hoverEffectsDisabledPages}
 
             />
           );

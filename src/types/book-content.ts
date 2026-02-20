@@ -25,7 +25,7 @@ export interface TextStyleConfig {
     /** CSS font-weight value (100–900). */
     fontWeight: number;
     /** Text alignment. */
-    textAlign: "left" | "center" | "right";
+    textAlign: "left" | "center" | "right" | "justify";
     /** CSS color string. */
     color: string;
     /** Line-height multiplier (e.g. 1.4). */
@@ -140,6 +140,18 @@ export interface LinkHitRegion {
     url: string;
     /** Z-order used to resolve overlap (higher wins). */
     zIndex: number;
+    /** Action type used by runtime click handlers. */
+    interactionType?: "external_url" | "resume_modal";
+    /** Controls hover-highlight shape rendering. */
+    highlightShape?: "block" | "svg";
+    /** Optional inline SVG data URL when `highlightShape` is `svg`. */
+    svgDataUrl?: string;
+    /** Optional fit mode for SVG highlight rendering. */
+    objectFit?: "cover" | "contain";
+    /** Optional aspect ratio used by SVG highlight rendering. */
+    aspectRatio?: number;
+    /** Optional crop used by SVG highlight rendering. */
+    crop?: VisualCrop;
 }
 
 export type LinkRegionMap = Record<string, LinkHitRegion[]>;

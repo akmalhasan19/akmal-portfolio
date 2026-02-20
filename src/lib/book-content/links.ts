@@ -1,6 +1,8 @@
 const ALLOWED_LINK_PROTOCOLS = new Set(["http:", "https:", "mailto:", "tel:"]);
 const DEFAULT_LINK_LABEL = "Open Link";
 const MAX_LINK_LABEL_LENGTH = 120;
+const URL_SCHEME_PREFIX = /^[a-zA-Z][a-zA-Z\d+.-]*:/;
+const LIKELY_HOST_PREFIX = /^(localhost(?::\d+)?|(?:[a-z0-9-]+\.)+[a-z]{2,})(?:[/:?#]|$)/i;
 
 export function sanitizeLinkLabel(input: string): string {
     const trimmed = (input || "").trim();
@@ -16,8 +18,14 @@ export function sanitizeLinkUrl(input: string): string {
         return "";
     }
 
+    const candidate = URL_SCHEME_PREFIX.test(raw) || raw.startsWith("//")
+        ? raw
+        : LIKELY_HOST_PREFIX.test(raw)
+            ? `https://${raw}`
+            : raw;
+
     try {
-        const parsed = new URL(raw);
+        const parsed = new URL(candidate);
         if (!ALLOWED_LINK_PROTOCOLS.has(parsed.protocol)) {
             return "";
         }
@@ -27,7 +35,7 @@ export function sanitizeLinkUrl(input: string): string {
         }
 
         // Keep mailto/tel compact and predictable.
-        return raw;
+        return candidate;
     } catch {
         return "";
     }

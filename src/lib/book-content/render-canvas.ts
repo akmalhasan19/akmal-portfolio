@@ -5,18 +5,26 @@ import type {
     SvgBlock,
     TextBlock,
 } from "@/types/book-content";
+import { normalizeAspectRatio, parseSvgAspectRatio } from "./aspect-ratio";
 import { computeSafeArea } from "./padding";
-import { svgToDataUrl } from "./svg-utils";
+import { sanitizeSvgCode, svgToBase64DataUrl, svgToDataUrl } from "./svg-utils";
 import { normalizePaperBackground } from "./paper-tone";
 import { getVisualCropSourceRect } from "./visual-crop";
 
 // ── Constants ────────────────────────────────
 
-export const CANVAS_RENDERER_VERSION = "6";
+export const CANVAS_RENDERER_VERSION = "11";
 export const BASE_CANVAS_HEIGHT = 1536;
 const DEFAULT_BG_COLOR = normalizePaperBackground();
 const MAX_IMAGE_CACHE_ENTRIES = 96;
+const SVG_RASTER_BASE_WIDTH = 1024;
 const resolvedFontFamilyCache = new Map<string, string>();
+
+interface LoadedVisualSource {
+    source: CanvasImageSource;
+    width: number;
+    height: number;
+}
 
 // ── Image cache ──────────────────────────────
 
@@ -51,7 +59,9 @@ function loadImage(url: string): Promise<HTMLImageElement> {
 
     const promise = new Promise<HTMLImageElement>((resolve, reject) => {
         const img = new Image();
-        img.crossOrigin = "anonymous";
+        if (!url.startsWith("data:") && !url.startsWith("blob:")) {
+            img.crossOrigin = "anonymous";
+        }
         img.onload = () => {
             imageLoadPromiseCache.delete(url);
             touchImageCache(url, img);
@@ -70,21 +80,66 @@ function loadImage(url: string): Promise<HTMLImageElement> {
 
 // ── Text wrapping ────────────────────────────
 
-function wrapText(
+interface WrappedLine {
+    text: string;
+    isParagraphEnd: boolean;
+}
+
+function splitTokenByWidth(
+    ctx: CanvasRenderingContext2D,
+    token: string,
+    maxWidth: number,
+): string[] {
+    if (!token) {
+        return [];
+    }
+    if (ctx.measureText(token).width <= maxWidth) {
+        return [token];
+    }
+
+    const chars = [...token];
+    const segments: string[] = [];
+    let current = "";
+
+    for (const char of chars) {
+        const test = `${current}${char}`;
+        if (current && ctx.measureText(test).width > maxWidth) {
+            segments.push(current);
+            current = char;
+            continue;
+        }
+
+        if (!current && ctx.measureText(char).width > maxWidth) {
+            // Extremely narrow blocks: still emit at least one character.
+            segments.push(char);
+            continue;
+        }
+
+        current = test;
+    }
+
+    if (current) {
+        segments.push(current);
+    }
+
+    return segments.length > 0 ? segments : [token];
+}
+
+function wrapTextDetailed(
     ctx: CanvasRenderingContext2D,
     text: string,
     maxWidth: number,
-): string[] {
-    const lines: string[] = [];
+): WrappedLine[] {
+    const lines: WrappedLine[] = [];
     const paragraphs = text.split("\n");
 
     for (const paragraph of paragraphs) {
         if (paragraph === "") {
-            lines.push("");
+            lines.push({ text: "", isParagraphEnd: true });
             continue;
         }
 
-        const words = paragraph.split(/\s+/);
+        const words = paragraph.split(/\s+/).filter(Boolean);
         let currentLine = "";
 
         for (const word of words) {
@@ -92,44 +147,130 @@ function wrapText(
             const metrics = ctx.measureText(testLine);
 
             if (metrics.width > maxWidth && currentLine) {
-                lines.push(currentLine);
-                currentLine = word;
+                lines.push({ text: currentLine, isParagraphEnd: false });
+                const segments = splitTokenByWidth(ctx, word, maxWidth);
+                if (segments.length > 1) {
+                    for (let i = 0; i < segments.length - 1; i += 1) {
+                        lines.push({ text: segments[i], isParagraphEnd: false });
+                    }
+                }
+                currentLine = segments[segments.length - 1] ?? "";
             } else {
-                currentLine = testLine;
+                if (currentLine) {
+                    currentLine = testLine;
+                    continue;
+                }
+
+                const segments = splitTokenByWidth(ctx, word, maxWidth);
+                if (segments.length > 1) {
+                    for (let i = 0; i < segments.length - 1; i += 1) {
+                        lines.push({ text: segments[i], isParagraphEnd: false });
+                    }
+                }
+                currentLine = segments[segments.length - 1] ?? "";
             }
         }
 
         if (currentLine) {
-            lines.push(currentLine);
+            lines.push({ text: currentLine, isParagraphEnd: true });
         }
     }
 
     return lines;
 }
 
-function drawRoundedRectPath(
+function wrapText(
     ctx: CanvasRenderingContext2D,
-    x: number,
-    y: number,
-    w: number,
-    h: number,
-    radius: number,
-) {
-    const r = Math.max(0, Math.min(radius, Math.min(w, h) * 0.5));
-    ctx.beginPath();
-    ctx.moveTo(x + r, y);
-    ctx.lineTo(x + w - r, y);
-    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-    ctx.lineTo(x + w, y + h - r);
-    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-    ctx.lineTo(x + r, y + h);
-    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-    ctx.lineTo(x, y + r);
-    ctx.quadraticCurveTo(x, y, x + r, y);
-    ctx.closePath();
+    text: string,
+    maxWidth: number,
+): string[] {
+    const lines = wrapTextDetailed(ctx, text, maxWidth);
+    return lines.map((line) => line.text);
 }
 
-// ── Draw functions ───────────────────────────
+function drawJustifiedTextLine(
+    ctx: CanvasRenderingContext2D,
+    line: string,
+    x: number,
+    y: number,
+    width: number,
+) {
+    const words = line.trim().split(/\s+/).filter(Boolean);
+    if (words.length <= 1) {
+        ctx.fillText(line, x, y);
+        return;
+    }
+
+    const textWithoutSpaces = words.join("");
+    const wordsWidth = ctx.measureText(textWithoutSpaces).width;
+    const gapCount = words.length - 1;
+    const gapWidth = (width - wordsWidth) / gapCount;
+
+    if (!Number.isFinite(gapWidth) || gapWidth <= 0) {
+        ctx.fillText(line, x, y);
+        return;
+    }
+
+    let cursorX = x;
+    for (let i = 0; i < words.length; i += 1) {
+        const word = words[i];
+        ctx.fillText(word, cursorX, y);
+        cursorX += ctx.measureText(word).width;
+        if (i < words.length - 1) {
+            cursorX += gapWidth;
+        }
+    }
+}
+
+function shouldJustifyLine(line: WrappedLine, textAlign: TextBlock["style"]["textAlign"]): boolean {
+    return textAlign === "justify" && !line.isParagraphEnd && /\s/.test(line.text);
+}
+
+function drawAlignedTextLine(
+    ctx: CanvasRenderingContext2D,
+    line: WrappedLine,
+    textAlign: TextBlock["style"]["textAlign"],
+    x: number,
+    y: number,
+    width: number,
+) {
+    if (shouldJustifyLine(line, textAlign)) {
+        ctx.textAlign = "left";
+        drawJustifiedTextLine(ctx, line.text, x, y, width);
+        return;
+    }
+
+    let lineX = x;
+    if (textAlign === "center") {
+        lineX = x + width / 2;
+        ctx.textAlign = "center";
+    } else if (textAlign === "right") {
+        lineX = x + width;
+        ctx.textAlign = "right";
+    } else {
+        ctx.textAlign = "left";
+    }
+
+    ctx.fillText(line.text, lineX, y);
+}
+
+function drawTextLines(
+    ctx: CanvasRenderingContext2D,
+    lines: WrappedLine[],
+    textAlign: TextBlock["style"]["textAlign"],
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    linePixelHeight: number,
+) {
+    for (let i = 0; i < lines.length; i += 1) {
+        const line = lines[i];
+        const lineY = y + i * linePixelHeight;
+        if (lineY > y + height) break;
+        drawAlignedTextLine(ctx, line, textAlign, x, lineY, width);
+    }
+}
 
 function drawTextBlock(
     ctx: CanvasRenderingContext2D,
@@ -160,28 +301,157 @@ function drawTextBlock(
     ctx.textBaseline = "top";
 
     const linePixelHeight = effectiveFontSize * lineHeight;
-    const wrappedLines = wrapText(ctx, block.content, w);
-
-    for (let i = 0; i < wrappedLines.length; i++) {
-        const lineY = y + i * linePixelHeight;
-        if (lineY > y + h) break;
-
-        let lineX = x;
-        if (textAlign === "center") {
-            lineX = x + w / 2;
-            ctx.textAlign = "center";
-        } else if (textAlign === "right") {
-            lineX = x + w;
-            ctx.textAlign = "right";
-        } else {
-            ctx.textAlign = "left";
-        }
-
-        ctx.fillText(wrappedLines[i], lineX, lineY);
-    }
-
+    const wrappedLines = wrapTextDetailed(ctx, block.content, w);
+    drawTextLines(ctx, wrappedLines, textAlign, x, y, w, h, linePixelHeight);
     ctx.restore();
 }
+
+function stripClipPathArtifacts(svgMarkup: string): string {
+    return svgMarkup
+        .replace(
+            /\sclip-path\s*=\s*(?:"url\(#.*?\)"|'url\(#.*?\)'|url\(#.*?\))/gi,
+            "",
+        )
+        .replace(/<clipPath[\s\S]*?<\/clipPath>/gi, "")
+        .replace(/<defs>\s*<\/defs>/gi, "");
+}
+
+function createSvgBlobUrl(svgMarkup: string): string | null {
+    if (typeof URL === "undefined" || typeof Blob === "undefined" || !svgMarkup) {
+        return null;
+    }
+    try {
+        const blob = new Blob([svgMarkup], { type: "image/svg+xml;charset=utf-8" });
+        return URL.createObjectURL(blob);
+    } catch {
+        return null;
+    }
+}
+
+function buildSvgLoadCandidates(svgCode: string): string[] {
+    const sanitized = sanitizeSvgCode(svgCode);
+    if (!sanitized) {
+        return [];
+    }
+
+    const variants = [
+        sanitized,
+        stripClipPathArtifacts(sanitized),
+    ].filter((value, index, list) => value && list.indexOf(value) === index);
+
+    const candidates: string[] = [];
+    for (const variant of variants) {
+        const utf8 = svgToDataUrl(variant);
+        const base64 = svgToBase64DataUrl(variant);
+        const blobUrl = createSvgBlobUrl(variant);
+        if (utf8) {
+            candidates.push(utf8);
+        }
+        if (base64) {
+            candidates.push(base64);
+        }
+        if (blobUrl) {
+            candidates.push(blobUrl);
+        }
+    }
+
+    return candidates;
+}
+
+async function rasterizeSvgWithCanvg(svgCode: string, fallbackAspectRatio: number): Promise<LoadedVisualSource | null> {
+    const sanitized = sanitizeSvgCode(svgCode);
+    if (!sanitized || typeof document === "undefined") {
+        return null;
+    }
+
+    const aspectRatio = normalizeAspectRatio(
+        parseSvgAspectRatio(sanitized),
+        fallbackAspectRatio,
+    );
+    const width = SVG_RASTER_BASE_WIDTH;
+    const height = Math.max(1, Math.round(width / aspectRatio));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+        return null;
+    }
+
+    const { Canvg } = await import("canvg");
+    const canvg = Canvg.fromString(ctx, sanitized, {
+        ignoreAnimation: true,
+        ignoreMouse: true,
+        ignoreDimensions: true,
+        ignoreClear: true,
+    });
+    await canvg.render();
+
+    return {
+        source: canvas,
+        width,
+        height,
+    };
+}
+
+async function loadSvgBlockImage(block: SvgBlock): Promise<LoadedVisualSource | null> {
+    const canvgRasterized = await rasterizeSvgWithCanvg(
+        block.svgCode,
+        normalizeAspectRatio(block.aspectRatio, 1),
+    ).catch(() => null);
+    if (canvgRasterized) {
+        return canvgRasterized;
+    }
+
+    const candidates = buildSvgLoadCandidates(block.svgCode);
+
+    for (const url of candidates) {
+        try {
+            const loaded = await loadImage(url);
+            if (url.startsWith("blob:") && typeof URL !== "undefined") {
+                URL.revokeObjectURL(url);
+            }
+            return {
+                source: loaded,
+                width: Math.max(1, loaded.naturalWidth || loaded.width || 1),
+                height: Math.max(1, loaded.naturalHeight || loaded.height || 1),
+            };
+        } catch {
+            if (url.startsWith("blob:") && typeof URL !== "undefined") {
+                URL.revokeObjectURL(url);
+            }
+            // Try next candidate.
+        }
+    }
+
+    return null;
+}
+
+function drawRoundedRectPath(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    radius: number,
+) {
+    const r = Math.max(0, Math.min(radius, Math.min(w, h) * 0.5));
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+}
+
+// ── Draw functions ───────────────────────────
+
 
 function resolveCanvasFontFamily(input: string): string {
     const fallback = "sans-serif";
@@ -218,7 +488,7 @@ function resolveCanvasFontFamily(input: string): string {
 function drawVisualBlock(
     ctx: CanvasRenderingContext2D,
     block: ImageBlock | SvgBlock,
-    img: HTMLImageElement,
+    sourceAsset: LoadedVisualSource,
     safeX: number,
     safeY: number,
     safeW: number,
@@ -234,7 +504,12 @@ function drawVisualBlock(
     const drawY = isCircleImage ? y + (h - drawBoxSize) * 0.5 : y;
     const drawW = isCircleImage ? drawBoxSize : w;
     const drawH = isCircleImage ? drawBoxSize : h;
-    const source = getVisualCropSourceRect(img.width, img.height, block.crop);
+    const sourceWidth = Math.max(1, sourceAsset.width);
+    const sourceHeight = Math.max(1, sourceAsset.height);
+    const source = getVisualCropSourceRect(sourceWidth, sourceHeight, block.crop);
+    const sourceAspect = block.type === "svg"
+        ? normalizeAspectRatio(block.aspectRatio, source.width / source.height)
+        : source.width / source.height;
 
     if (drawW <= 0 || drawH <= 0 || source.width <= 0 || source.height <= 0) {
         return;
@@ -255,7 +530,7 @@ function drawVisualBlock(
 
     if (block.objectFit === "contain") {
         // Fit the cropped source inside the block.
-        const imgAspect = source.width / source.height;
+        const imgAspect = sourceAspect;
         const blockAspect = drawW / drawH;
         let targetW = drawW;
         let targetH = drawH;
@@ -271,7 +546,7 @@ function drawVisualBlock(
         }
 
         ctx.drawImage(
-            img,
+            sourceAsset.source,
             source.x,
             source.y,
             source.width,
@@ -283,7 +558,7 @@ function drawVisualBlock(
         );
     } else {
         // Cover the block using the cropped source as the starting viewport.
-        const imgAspect = source.width / source.height;
+        const imgAspect = sourceAspect;
         const blockAspect = drawW / drawH;
         let sx = source.x;
         let sy = source.y;
@@ -298,7 +573,7 @@ function drawVisualBlock(
             sy = source.y + (source.height - sH) / 2;
         }
 
-        ctx.drawImage(img, sx, sy, sW, sH, drawX, drawY, drawW, drawH);
+        ctx.drawImage(sourceAsset.source, sx, sy, sW, sH, drawX, drawY, drawW, drawH);
     }
 
     ctx.restore();
@@ -420,12 +695,16 @@ export async function renderPageSideToCanvas(
         (b): b is SvgBlock => b.type === "svg",
     );
 
-    const loadedImages = new Map<string, HTMLImageElement>();
+    const loadedImages = new Map<string, LoadedVisualSource>();
     await Promise.all(
         imageBlocks.map(async (block) => {
             try {
                 const img = await loadImage(block.assetPath);
-                loadedImages.set(block.id, img);
+                loadedImages.set(block.id, {
+                    source: img,
+                    width: Math.max(1, img.naturalWidth || img.width || 1),
+                    height: Math.max(1, img.naturalHeight || img.height || 1),
+                });
             } catch {
                 // Skip failed images silently
             }
@@ -435,12 +714,16 @@ export async function renderPageSideToCanvas(
     await Promise.all(
         svgBlocks.map(async (block) => {
             try {
-                const svgUrl = svgToDataUrl(block.svgCode);
-                if (!svgUrl) {
-                    return;
+                const loaded = await loadSvgBlockImage(block);
+
+                if (loaded) {
+                    loadedImages.set(block.id, loaded);
+                } else if (process.env.NODE_ENV !== "production") {
+                    console.warn(
+                        "[render-canvas] Failed to load SVG block",
+                        block.id,
+                    );
                 }
-                const img = await loadImage(svgUrl);
-                loadedImages.set(block.id, img);
             } catch {
                 // Skip failed SVGs silently
             }
@@ -449,20 +732,26 @@ export async function renderPageSideToCanvas(
 
     // 5. Draw each block
     for (const block of sortedBlocks) {
-        if (block.type === "text") {
-            drawTextBlock(ctx, block, safe.x, safe.y, safe.w, safe.h, scaleY);
-        } else if (block.type === "image") {
-            const img = loadedImages.get(block.id);
-            if (img) {
-                drawVisualBlock(ctx, block, img, safe.x, safe.y, safe.w, safe.h);
+        try {
+            if (block.type === "text") {
+                drawTextBlock(ctx, block, safe.x, safe.y, safe.w, safe.h, scaleY);
+            } else if (block.type === "image") {
+                const img = loadedImages.get(block.id);
+                if (img) {
+                    drawVisualBlock(ctx, block, img, safe.x, safe.y, safe.w, safe.h);
+                }
+            } else if (block.type === "svg") {
+                const img = loadedImages.get(block.id);
+                if (img) {
+                    drawVisualBlock(ctx, block, img, safe.x, safe.y, safe.w, safe.h);
+                }
+            } else if (block.type === "link") {
+                drawLinkBlock(ctx, block, safe.x, safe.y, safe.w, safe.h, scaleY);
             }
-        } else if (block.type === "svg") {
-            const img = loadedImages.get(block.id);
-            if (img) {
-                drawVisualBlock(ctx, block, img, safe.x, safe.y, safe.w, safe.h);
+        } catch {
+            if (process.env.NODE_ENV !== "production") {
+                console.warn("[render-canvas] Failed to draw block", block.id);
             }
-        } else if (block.type === "link") {
-            drawLinkBlock(ctx, block, safe.x, safe.y, safe.w, safe.h, scaleY);
         }
     }
 

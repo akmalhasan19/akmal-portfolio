@@ -79,7 +79,9 @@ export function validateTextStyle(
             MAX_FONT_WEIGHT,
         ),
         textAlign:
-            style?.textAlign === "center" || style?.textAlign === "right"
+            style?.textAlign === "center"
+            || style?.textAlign === "right"
+            || style?.textAlign === "justify"
                 ? style.textAlign
                 : "left",
         color:

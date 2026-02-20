@@ -31,9 +31,94 @@ interface BlockInspectorProps {
 const DEFAULT_MOVE_STEP = 0.01;
 const MIN_MOVE_STEP = 0.001;
 const MAX_MOVE_STEP = 0.2;
+const RESUME_SVG_MARKER = 'data-block-role="resume-button"';
+const RESUME_LABEL_TEXT_ID = "resume-label";
+const DEFAULT_RESUME_FONT_SIZE = 46;
+const MIN_RESUME_FONT_SIZE = 10;
+const MAX_RESUME_FONT_SIZE = 96;
+const DEFAULT_RESUME_FONT_FAMILY = "Arial, sans-serif";
 
 function clamp(value: number, min: number, max: number): number {
     return Math.min(max, Math.max(min, value));
+}
+
+function isResumeButtonSvg(svgCode: string): boolean {
+    const source = typeof svgCode === "string" ? svgCode : "";
+    if (!source) {
+        return false;
+    }
+    return source.includes(RESUME_SVG_MARKER)
+        || source.includes(`id="${RESUME_LABEL_TEXT_ID}"`)
+        || source.includes(`id='${RESUME_LABEL_TEXT_ID}'`)
+        || /<text\b[^>]*>\s*Resume\s*<\/text>/i.test(source);
+}
+
+function getResumeLabelOpenTag(svgCode: string): string | null {
+    const byId = svgCode.match(
+        /<text\b[^>]*\bid\s*=\s*(?:"resume-label"|'resume-label')[^>]*>/i,
+    );
+    if (byId?.[0]) {
+        return byId[0];
+    }
+
+    const byContent = svgCode.match(/<text\b[^>]*>(?=\s*Resume\s*<\/text>)/i);
+    return byContent?.[0] ?? null;
+}
+
+function readResumeFontSize(svgCode: string): number {
+    const tag = getResumeLabelOpenTag(svgCode);
+    if (!tag) {
+        return DEFAULT_RESUME_FONT_SIZE;
+    }
+
+    const match = tag.match(/\bfont-size\s*=\s*(?:"([^"]+)"|'([^']+)')/i);
+    const parsed = Number.parseFloat((match?.[1] || match?.[2] || "").trim());
+    if (!Number.isFinite(parsed)) {
+        return DEFAULT_RESUME_FONT_SIZE;
+    }
+    return clamp(parsed, MIN_RESUME_FONT_SIZE, MAX_RESUME_FONT_SIZE);
+}
+
+function readResumeFontFamily(svgCode: string): string {
+    const tag = getResumeLabelOpenTag(svgCode);
+    if (!tag) {
+        return DEFAULT_RESUME_FONT_FAMILY;
+    }
+
+    const match = tag.match(/\bfont-family\s*=\s*(?:"([^"]+)"|'([^']+)')/i);
+    const family = (match?.[1] || match?.[2] || "").trim();
+    return family || DEFAULT_RESUME_FONT_FAMILY;
+}
+
+function ensureResumeMarker(svgCode: string): string {
+    if (svgCode.includes(RESUME_SVG_MARKER)) {
+        return svgCode;
+    }
+    return svgCode.replace(/<svg\b/i, `<svg ${RESUME_SVG_MARKER}`);
+}
+
+function setResumeLabelAttribute(svgCode: string, attrName: string, attrValue: string): string {
+    const openTag = getResumeLabelOpenTag(svgCode);
+    if (!openTag) {
+        return svgCode;
+    }
+
+    let nextOpenTag = openTag;
+    if (!/\bid\s*=/.test(nextOpenTag)) {
+        nextOpenTag = nextOpenTag.replace(
+            /<text\b/i,
+            `<text id="${RESUME_LABEL_TEXT_ID}"`,
+        );
+    }
+
+    const attrPattern = new RegExp(`\\b${attrName}\\s*=\\s*(?:"[^"]*"|'[^']*')`, "i");
+    if (attrPattern.test(nextOpenTag)) {
+        nextOpenTag = nextOpenTag.replace(attrPattern, `${attrName}="${attrValue}"`);
+    } else {
+        nextOpenTag = nextOpenTag.replace(/>$/, ` ${attrName}="${attrValue}">`);
+    }
+
+    return svgCode.replace(openTag, nextOpenTag);
 }
 
 function getBounds(blocks: LayoutBlock[]) {
@@ -74,6 +159,29 @@ export function BlockInspector({
     const selectedBlock = isGroupSelection
         ? null
         : selectedBlocks[0] ?? layout.blocks.find((b) => b.id === selectedBlockId);
+    const selectedSvgCode = selectedBlock?.type === "svg" ? selectedBlock.svgCode : "";
+    const isResumeSvg = selectedBlock?.type === "svg" && isResumeButtonSvg(selectedSvgCode);
+    const resumeFontSize = isResumeSvg
+        ? readResumeFontSize(selectedSvgCode)
+        : DEFAULT_RESUME_FONT_SIZE;
+    const resumeFontFamily = isResumeSvg
+        ? readResumeFontFamily(selectedSvgCode)
+        : DEFAULT_RESUME_FONT_FAMILY;
+
+    const resetVisualCrop = (
+        block: Extract<LayoutBlock, { type: "image" | "svg" }>,
+    ) => {
+        const targetRatio = block.type === "image" && block.shape === "circle"
+            ? 1
+            : deriveVisualCropBaseAspectRatio(
+                getBlockAspectRatio(block),
+                block.crop,
+            );
+        updateBlock(block.id, {
+            crop: undefined,
+            aspectRatio: targetRatio,
+        });
+    };
 
     const updateBlock = (blockId: string, updates: Record<string, unknown>) => {
         onLayoutChange((prev) => ({
@@ -96,6 +204,31 @@ export function BlockInspector({
                     : b,
             ),
         }));
+    };
+
+    const updateResumeTypography = (
+        block: Extract<LayoutBlock, { type: "svg" }>,
+        updates: { fontSize?: number; fontFamily?: string },
+    ) => {
+        let nextSvgCode = ensureResumeMarker(block.svgCode);
+        const currentSize = readResumeFontSize(nextSvgCode);
+        const currentFamily = readResumeFontFamily(nextSvgCode);
+        const requestedSize = updates.fontSize;
+        const safeRequestedSize: number = Number.isFinite(requestedSize)
+            ? requestedSize!
+            : currentSize;
+        const nextSize = clamp(
+            safeRequestedSize,
+            MIN_RESUME_FONT_SIZE,
+            MAX_RESUME_FONT_SIZE,
+        );
+        const normalizedFamily = (updates.fontFamily ?? currentFamily)
+            .replace(/["']/g, "")
+            .trim() || DEFAULT_RESUME_FONT_FAMILY;
+
+        nextSvgCode = setResumeLabelAttribute(nextSvgCode, "font-size", String(nextSize));
+        nextSvgCode = setResumeLabelAttribute(nextSvgCode, "font-family", normalizedFamily);
+        updateBlock(block.id, { svgCode: nextSvgCode });
     };
 
     const moveBlock = (
@@ -660,7 +793,7 @@ export function BlockInspector({
                                 value={selectedBlock.style.textAlign}
                                 onChange={(e) =>
                                     updateTextStyle(selectedBlock.id, {
-                                        textAlign: e.target.value as "left" | "center" | "right",
+                                        textAlign: e.target.value as "left" | "center" | "right" | "justify",
                                     })
                                 }
                                 className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs outline-none focus:border-amber-500"
@@ -668,6 +801,7 @@ export function BlockInspector({
                                 <option value="left">Left</option>
                                 <option value="center">Center</option>
                                 <option value="right">Right</option>
+                                <option value="justify">Rata kanan-kiri</option>
                             </select>
                         </div>
                         <div className="space-y-0.5">
@@ -795,6 +929,16 @@ export function BlockInspector({
                             <option value="contain">Contain</option>
                         </select>
                     </div>
+
+                    {selectedBlock.crop && (
+                        <button
+                            type="button"
+                            onClick={() => resetVisualCrop(selectedBlock)}
+                            className="w-full rounded border border-amber-700/50 bg-amber-900/20 px-2 py-1.5 text-xs font-medium text-amber-300 transition-colors hover:bg-amber-900/35"
+                        >
+                            Reset Crop
+                        </button>
+                    )}
                 </>
             )}
 
@@ -845,6 +989,56 @@ export function BlockInspector({
                         </p>
                     </div>
 
+                    {isResumeSvg && (
+                        <div className="space-y-2 rounded border border-neutral-800 bg-neutral-900/50 p-2">
+                            <label className="text-[10px] font-semibold uppercase tracking-wide text-neutral-500">
+                                Resume Text
+                            </label>
+                            <div className="space-y-0.5">
+                                <label className="text-[10px] uppercase text-neutral-600">
+                                    Font Size
+                                </label>
+                                <input
+                                    type="number"
+                                    min={MIN_RESUME_FONT_SIZE}
+                                    max={MAX_RESUME_FONT_SIZE}
+                                    value={resumeFontSize}
+                                    onChange={(e) =>
+                                        updateResumeTypography(selectedBlock, {
+                                            fontSize: Number.parseFloat(e.target.value),
+                                        })
+                                    }
+                                    className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs outline-none focus:border-amber-500"
+                                />
+                            </div>
+                            <div className="space-y-0.5">
+                                <label className="text-[10px] uppercase text-neutral-600">
+                                    Font Family
+                                </label>
+                                <select
+                                    value={resumeFontFamily}
+                                    onChange={(e) =>
+                                        updateResumeTypography(selectedBlock, {
+                                            fontFamily: e.target.value,
+                                        })
+                                    }
+                                    className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs outline-none focus:border-amber-500"
+                                >
+                                    <option value="Arial, sans-serif">Arial</option>
+                                    <option value="Helvetica, Arial, sans-serif">Helvetica</option>
+                                    <option value="Verdana, Geneva, sans-serif">Verdana</option>
+                                    <option value="Trebuchet MS, sans-serif">Trebuchet MS</option>
+                                    <option value="Tahoma, Geneva, sans-serif">Tahoma</option>
+                                    <option value="Georgia, serif">Georgia</option>
+                                    <option value="Times New Roman, serif">Times New Roman</option>
+                                    <option value="var(--font-geist-sans)">Geist Sans</option>
+                                    <option value="var(--font-crimson-text)">Crimson Text</option>
+                                    <option value="var(--font-caveat)">Caveat</option>
+                                </select>
+                            </div>
+                        </div>
+                    )}
+
                     <div className="space-y-0.5">
                         <label className="text-[10px] uppercase text-neutral-600">
                             Object Fit
@@ -862,6 +1056,16 @@ export function BlockInspector({
                             <option value="cover">Cover</option>
                         </select>
                     </div>
+
+                    {selectedBlock.crop && (
+                        <button
+                            type="button"
+                            onClick={() => resetVisualCrop(selectedBlock)}
+                            className="w-full rounded border border-amber-700/50 bg-amber-900/20 px-2 py-1.5 text-xs font-medium text-amber-300 transition-colors hover:bg-amber-900/35"
+                        >
+                            Reset Crop
+                        </button>
+                    )}
                 </>
             )}
 

@@ -27,9 +27,12 @@ export function getBlockAspectRatio(
 }
 
 export function parseSvgAspectRatio(svgCode: string): number | null {
-    const viewBoxMatch = svgCode.match(/viewBox\s*=\s*"([^"]+)"/i);
+    const viewBoxMatch = svgCode.match(
+        /viewBox\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/i,
+    );
     if (viewBoxMatch) {
-        const parts = viewBoxMatch[1]
+        const rawViewBox = viewBoxMatch[1] || viewBoxMatch[2] || viewBoxMatch[3] || "";
+        const parts = rawViewBox
             .trim()
             .split(/[\s,]+/)
             .map((v) => Number.parseFloat(v));
@@ -38,11 +41,15 @@ export function parseSvgAspectRatio(svgCode: string): number | null {
         }
     }
 
-    const widthMatch = svgCode.match(/\bwidth\s*=\s*"([^"]+)"/i);
-    const heightMatch = svgCode.match(/\bheight\s*=\s*"([^"]+)"/i);
+    const widthMatch = svgCode.match(
+        /\bwidth\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/i,
+    );
+    const heightMatch = svgCode.match(
+        /\bheight\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/i,
+    );
     if (widthMatch && heightMatch) {
-        const width = Number.parseFloat(widthMatch[1]);
-        const height = Number.parseFloat(heightMatch[1]);
+        const width = Number.parseFloat(widthMatch[1] || widthMatch[2] || widthMatch[3] || "");
+        const height = Number.parseFloat(heightMatch[1] || heightMatch[2] || heightMatch[3] || "");
         if (Number.isFinite(width) && Number.isFinite(height) && height > 0) {
             return normalizeAspectRatio(width / height);
         }

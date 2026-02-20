@@ -12,9 +12,12 @@ import type {
 import { pageSideKey } from "@/types/book-content";
 import { computeSafeArea } from "./padding";
 import { CANVAS_RENDERER_VERSION, renderPageSideToCanvas } from "./render-canvas";
+import { svgToDataUrl } from "./svg-utils";
 import { validateLayout } from "./validation";
 
 export type DynamicTextureMap = Record<string, CanvasTexture>;
+const RESUME_BUTTON_MARKER = /data-block-role\s*=\s*["']resume-button["']/i;
+const RESUME_LABEL_CONTENT = /<text\b[^>]*>\s*Resume\s*<\/text>/i;
 
 interface UseBookSideTexturesOptions {
     bookKey: BookKey;
@@ -96,10 +99,12 @@ function buildLinkHitRegions(
     const regions: LinkHitRegion[] = [];
 
     for (const block of layout.blocks) {
+        const isResumeSvgBlock = block.type === "svg"
+            && (RESUME_BUTTON_MARKER.test(block.svgCode) || RESUME_LABEL_CONTENT.test(block.svgCode));
         const blockUrl = block.type === "link"
             ? (block.linkUrl || block.url)
             : block.linkUrl;
-        if (!blockUrl) {
+        if (!blockUrl && !isResumeSvgBlock) {
             continue;
         }
 
@@ -117,8 +122,14 @@ function buildLinkHitRegions(
             y,
             w: Math.max(0, maxX - x),
             h: Math.max(0, maxY - y),
-            url: blockUrl,
+            url: blockUrl ?? "",
             zIndex: block.zIndex,
+            interactionType: isResumeSvgBlock ? "resume_modal" : "external_url",
+            highlightShape: block.type === "svg" ? "svg" : "block",
+            svgDataUrl: block.type === "svg" ? (svgToDataUrl(block.svgCode) ?? undefined) : undefined,
+            objectFit: block.type === "svg" ? block.objectFit : undefined,
+            aspectRatio: block.type === "svg" ? block.aspectRatio : undefined,
+            crop: block.type === "svg" ? block.crop : undefined,
         });
     }
 
@@ -137,6 +148,7 @@ export function useBookSideContent({
 }: UseBookSideTexturesOptions): UseBookSideContentResult {
     const [textures, setTextures] = useState<DynamicTextureMap>({});
     const [linkRegions, setLinkRegions] = useState<LinkRegionMap>({});
+    const [refreshToken, setRefreshToken] = useState(0);
 
     const layoutCacheRef = useRef<Map<string, string>>(new Map());
     const textureCacheRef = useRef<Map<string, CanvasTexture>>(new Map());
@@ -161,6 +173,32 @@ export function useBookSideContent({
             regionCache.clear();
         };
     }, []);
+
+    useEffect(() => {
+        if (!enabled) {
+            return;
+        }
+
+        const bumpRefresh = () => {
+            setRefreshToken((prev) => prev + 1);
+        };
+
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === "visible") {
+                bumpRefresh();
+            }
+        };
+
+        window.addEventListener("focus", bumpRefresh);
+        window.addEventListener("pageshow", bumpRefresh);
+        document.addEventListener("visibilitychange", handleVisibilityChange);
+
+        return () => {
+            window.removeEventListener("focus", bumpRefresh);
+            window.removeEventListener("pageshow", bumpRefresh);
+            document.removeEventListener("visibilitychange", handleVisibilityChange);
+        };
+    }, [enabled]);
 
     useEffect(() => {
         const resolutionKey = `${canvasWidth}x${canvasHeight}`;
@@ -320,6 +358,7 @@ export function useBookSideContent({
         textureLoadRadius,
         currentPage,
         enabled,
+        refreshToken,
     ]);
 
     return { textures, linkRegions };

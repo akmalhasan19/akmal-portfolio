@@ -16,6 +16,10 @@ export const BOOK2_EDITABLE_CONTEXTS: readonly Book2EditableContext[] = [
     // left page = left middle sheet back, right page = right middle sheet front.
     { sheetIndex: BOOK2_LEFT_MIDDLE_SHEET_INDEX, side: "back" },
     { sheetIndex: BOOK2_RIGHT_MIDDLE_SHEET_INDEX, side: "front" },
+    // Next spread (one flip forward from center):
+    // left page = right middle sheet back, right page = next sheet front.
+    { sheetIndex: BOOK2_RIGHT_MIDDLE_SHEET_INDEX, side: "back" },
+    { sheetIndex: BOOK2_RIGHT_MIDDLE_SHEET_INDEX + 1, side: "front" },
 ];
 
 export function isBook2EditableContext(

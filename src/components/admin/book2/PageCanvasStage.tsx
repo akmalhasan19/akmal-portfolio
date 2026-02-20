@@ -11,6 +11,7 @@ import type {
     VisualCrop,
 } from "@/types/book-content";
 import { canAddBlock } from "@/lib/book-content/validation";
+import { getSnappedDragDelta, getSnappedUniformResizeScale } from "@/lib/book-content/block-snap";
 import {
     nudgeStepAtom,
     selectedBlockIdAtom,
@@ -20,7 +21,7 @@ import { computeSafeArea } from "@/lib/book-content/padding";
 import { sanitizeSvgCode, svgToDataUrl } from "@/lib/book-content/svg-utils";
 import { normalizePaperBackground } from "@/lib/book-content/paper-tone";
 import { useBookProfileImage } from "@/lib/book-content/useBookProfileImage";
-import { BASE_CANVAS_HEIGHT } from "@/lib/book-content/render-canvas";
+import { BASE_CANVAS_HEIGHT, renderPageSideToCanvas } from "@/lib/book-content/render-canvas";
 import { getBlockAspectRatio } from "@/lib/book-content/aspect-ratio";
 import { VisualBlockPreview } from "@/components/admin/VisualBlockPreview";
 import {
@@ -28,6 +29,7 @@ import {
     type VisualCropEdge,
     buildDraggedCrop,
     buildVisualCropBlockForEdge,
+    getSnappedCropForEdge,
 } from "@/lib/book-content/visual-crop-interaction";
 import { normalizeVisualCrop } from "@/lib/book-content/visual-crop";
 
@@ -39,6 +41,16 @@ const REFERENCE_TEXTURE_WIDTH = Math.round(REFERENCE_TEXTURE_HEIGHT * (1.28 / 1.
 const MIN_BLOCK_SIZE = 0.05;
 const MIN_NUDGE_STEP = 0.001;
 const MAX_NUDGE_STEP = 0.2;
+const SNAP_THRESHOLD_PX = 8;
+const RESUME_BUTTON_SVG_CODE =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 92" fill="none" data-block-role="resume-button">'
+    + '<rect x="2" y="2" width="316" height="88" rx="12" fill="#0a0a0a" stroke="#f5f5f5" stroke-width="3"/>'
+    + '<rect x="22" y="20" width="38" height="52" rx="6" fill="#f5f5f5"/>'
+    + '<path d="M41 31v20" stroke="#0a0a0a" stroke-width="4" stroke-linecap="round"/>'
+    + '<path d="M31 43l10 10 10-10" stroke="#0a0a0a" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>'
+    + '<path d="M30 61h22" stroke="#0a0a0a" stroke-width="4" stroke-linecap="round"/>'
+    + '<text id="resume-label" x="84" y="58" fill="#f5f5f5" font-size="46" font-family="Arial, sans-serif" font-weight="700">Resume</text>'
+    + '</svg>';
 
 interface BlockRect {
     x: number;
@@ -130,6 +142,40 @@ function isVisualBlock(block: LayoutBlock): block is LayoutBlock & (
     return block.type === "image" || block.type === "svg";
 }
 
+function getEdgeResizedRect(
+    startRect: BlockRect,
+    edge: VisualCropEdge,
+    deltaX: number,
+    deltaY: number,
+    minSize: number,
+): BlockRect {
+    let nextX = startRect.x;
+    let nextY = startRect.y;
+    let nextW = startRect.w;
+    let nextH = startRect.h;
+
+    if (edge === "left") {
+        const right = startRect.x + startRect.w;
+        nextX = clamp(startRect.x + deltaX, 0, right - minSize);
+        nextW = right - nextX;
+    } else if (edge === "right") {
+        nextW = clamp(startRect.w + deltaX, minSize, 1 - startRect.x);
+    } else if (edge === "top") {
+        const bottom = startRect.y + startRect.h;
+        nextY = clamp(startRect.y + deltaY, 0, bottom - minSize);
+        nextH = bottom - nextY;
+    } else {
+        nextH = clamp(startRect.h + deltaY, minSize, 1 - startRect.y);
+    }
+
+    return {
+        x: nextX,
+        y: nextY,
+        w: nextW,
+        h: nextH,
+    };
+}
+
 export function PageCanvasStage({
     layout,
     onLayoutChange,
@@ -157,6 +203,11 @@ export function PageCanvasStage({
         w: number;
         h: number;
     } | null>(null);
+    const [finalRenderPreviewSrc, setFinalRenderPreviewSrc] = useState<string | null>(null);
+    const [snapGuide, setSnapGuide] = useState<{ x: number | null; y: number | null }>({
+        x: null,
+        y: null,
+    });
     const multiSelectedBounds = useMemo(() => {
         if (selectedBlockIds.length <= 1) {
             return null;
@@ -194,6 +245,40 @@ export function PageCanvasStage({
         }
         return safeArea.h / referenceSafeArea.h;
     }, [referenceSafeArea.h, safeArea.h]);
+    const isTransforming = Boolean(dragging || resizing || cropping);
+    const showInlinePreview = !finalRenderPreviewSrc || isTransforming;
+
+    useEffect(() => {
+        if (isTransforming) {
+            return;
+        }
+
+        let cancelled = false;
+        const timer = window.setTimeout(() => {
+            void (async () => {
+                try {
+                    const canvas = await renderPageSideToCanvas(
+                        layout,
+                        REFERENCE_TEXTURE_WIDTH,
+                        REFERENCE_TEXTURE_HEIGHT,
+                    );
+                    if (cancelled) {
+                        return;
+                    }
+                    setFinalRenderPreviewSrc(canvas.toDataURL("image/png"));
+                } catch {
+                    if (!cancelled) {
+                        setFinalRenderPreviewSrc(null);
+                    }
+                }
+            })();
+        }, 80);
+
+        return () => {
+            cancelled = true;
+            window.clearTimeout(timer);
+        };
+    }, [isTransforming, layout]);
 
     const applySelection = useCallback(
         (nextIds: string[], primaryId?: string | null) => {
@@ -238,7 +323,7 @@ export function PageCanvasStage({
     }, [applySelection, layout.blocks, selectedBlockId, selectedBlockIds]);
 
     const addBlock = useCallback(
-        (type: "text" | "image" | "svg" | "profile") => {
+        (type: "text" | "image" | "svg" | "profile" | "resume") => {
             if (!canAddBlock(layout)) {
                 alert("Maksimal 20 blok per sisi halaman.");
                 return;
@@ -296,6 +381,20 @@ export function PageCanvasStage({
                     objectFit: "cover",
                     shape: "circle",
                 } satisfies ImageBlock;
+            } else if (type === "resume") {
+                newBlock = {
+                    id,
+                    type: "svg",
+                    x: 0.1,
+                    y: 0.72,
+                    w: 0.44,
+                    h: 0.12,
+                    aspectRatio: 320 / 92,
+                    zIndex: maxZ + 1,
+                    objectFit: "contain",
+                    svgCode: RESUME_BUTTON_SVG_CODE,
+                    linkUrl: "",
+                } satisfies SvgBlock;
             } else {
                 newBlock = {
                     id,
@@ -440,6 +539,7 @@ export function PageCanvasStage({
                 ? selectedBlockIds
                 : [block.id];
             applySelection(activeIds, block.id);
+            setSnapGuide({ x: null, y: null });
 
             const origins: Record<string, BlockRect> = {};
             for (const selectedBlock of layout.blocks) {
@@ -460,6 +560,7 @@ export function PageCanvasStage({
                 startY: e.clientY,
                 origins,
             });
+            setSnapGuide({ x: null, y: null });
             (e.target as HTMLElement).setPointerCapture(e.pointerId);
         },
         [
@@ -472,17 +573,21 @@ export function PageCanvasStage({
 
     const handleCropPointerDown = useCallback(
         (e: React.PointerEvent, block: LayoutBlock, edge: VisualCropEdge) => {
-            if (!isVisualBlock(block)) {
+            if (block.type !== "text" && !isVisualBlock(block)) {
                 return;
             }
 
             e.stopPropagation();
             e.preventDefault();
+            setSnapGuide({ x: null, y: null });
             applySelection([block.id], block.id);
             setDragging(null);
             setResizing(null);
+            setSnapGuide({ x: null, y: null });
 
-            const startCrop = normalizeVisualCrop(block.crop);
+            const startCrop = normalizeVisualCrop(
+                isVisualBlock(block) ? block.crop : undefined,
+            );
             setCropping({
                 blockId: block.id,
                 drag: {
@@ -493,12 +598,20 @@ export function PageCanvasStage({
                     startRect: { x: block.x, y: block.y, w: block.w, h: block.h },
                 },
             });
-            const previewBlock = buildVisualCropBlockForEdge(
-                block,
-                startCrop,
-                MIN_BLOCK_SIZE,
-                edge,
-            );
+            const previewBlock = block.type === "text"
+                ? getEdgeResizedRect(
+                    { x: block.x, y: block.y, w: block.w, h: block.h },
+                    edge,
+                    0,
+                    0,
+                    MIN_BLOCK_SIZE,
+                )
+                : buildVisualCropBlockForEdge(
+                    block,
+                    startCrop,
+                    MIN_BLOCK_SIZE,
+                    edge,
+                );
             setCropPreview({
                 blockId: block.id,
                 crop: startCrop,
@@ -515,6 +628,35 @@ export function PageCanvasStage({
     const handlePointerMove = useCallback(
         (e: React.PointerEvent) => {
             if (cropping) {
+                const source = layout.blocks.find((b) => b.id === cropping.blockId);
+                if (!source) {
+                    return;
+                }
+
+                if (source.type === "text") {
+                    const deltaX =
+                        safeArea.w > 0 ? (e.clientX - cropping.drag.startX) / safeArea.w : 0;
+                    const deltaY =
+                        safeArea.h > 0 ? (e.clientY - cropping.drag.startY) / safeArea.h : 0;
+                    const previewRect = getEdgeResizedRect(
+                        cropping.drag.startRect,
+                        cropping.drag.edge,
+                        deltaX,
+                        deltaY,
+                        MIN_BLOCK_SIZE,
+                    );
+                    setSnapGuide({ x: null, y: null });
+                    setCropPreview({
+                        blockId: cropping.blockId,
+                        crop: cropping.drag.startCrop,
+                        x: previewRect.x,
+                        y: previewRect.y,
+                        w: previewRect.w,
+                        h: previewRect.h,
+                    });
+                    return;
+                }
+
                 const nextCrop = buildDraggedCrop(
                     cropping.drag,
                     e.clientX,
@@ -522,19 +664,36 @@ export function PageCanvasStage({
                     safeArea.w,
                     safeArea.h,
                 );
-                const source = layout.blocks.find((b) => b.id === cropping.blockId);
-                if (!source) {
-                    return;
-                }
-                const previewBlock = buildVisualCropBlockForEdge(
+                const targetRects = layout.blocks
+                    .filter((block) => block.id !== cropping.blockId)
+                    .map((block) => ({
+                        x: block.x,
+                        y: block.y,
+                        w: block.w,
+                        h: block.h,
+                    }));
+                const snappedCrop = getSnappedCropForEdge(
                     source,
                     nextCrop,
+                    cropping.drag.edge,
+                    targetRects,
+                    SNAP_THRESHOLD_PX / Math.max(1, safeArea.w),
+                    SNAP_THRESHOLD_PX / Math.max(1, safeArea.h),
+                    MIN_BLOCK_SIZE,
+                );
+                const previewBlock = buildVisualCropBlockForEdge(
+                    source,
+                    snappedCrop.crop,
                     MIN_BLOCK_SIZE,
                     cropping.drag.edge,
                 );
+                setSnapGuide({
+                    x: snappedCrop.guideX,
+                    y: snappedCrop.guideY,
+                });
                 setCropPreview({
                     blockId: cropping.blockId,
-                    crop: nextCrop,
+                    crop: snappedCrop.crop,
                     x: previewBlock.x,
                     y: previewBlock.y,
                     w: previewBlock.w,
@@ -563,9 +722,31 @@ export function PageCanvasStage({
                         maxDy = Math.min(maxDy, 1 - origin.h - origin.y);
                     }
 
-                    const appliedDx = clamp(rawDx, minDx, maxDx);
-                    const appliedDy = clamp(rawDy, minDy, maxDy);
+                    const proposedDx = clamp(rawDx, minDx, maxDx);
+                    const proposedDy = clamp(rawDy, minDy, maxDy);
                     const activeIds = new Set(dragging.blockIds);
+                    const targetRects = layout.blocks
+                        .filter((block) => !activeIds.has(block.id))
+                        .map((block) => ({
+                            x: block.x,
+                            y: block.y,
+                            w: block.w,
+                            h: block.h,
+                        }));
+                    const snapped = getSnappedDragDelta({
+                        proposedDx,
+                        proposedDy,
+                        movingRects: originRects,
+                        targetRects,
+                        thresholdX: SNAP_THRESHOLD_PX / Math.max(1, safeArea.w),
+                        thresholdY: SNAP_THRESHOLD_PX / Math.max(1, safeArea.h),
+                    });
+                    const appliedDx = clamp(snapped.dx, minDx, maxDx);
+                    const appliedDy = clamp(snapped.dy, minDy, maxDy);
+                    setSnapGuide({
+                        x: snapped.guideX,
+                        y: snapped.guideY,
+                    });
 
                     onLayoutChange((prev) => ({
                         ...prev,
@@ -619,8 +800,29 @@ export function PageCanvasStage({
                     resizing.bounds.h > 0 ? MIN_BLOCK_SIZE / resizing.bounds.h : 1;
                 const minScale = Math.max(minScaleByW, minScaleByH);
                 const safeMinScale = Math.min(minScale, maxScale);
-                const uniformScale = clamp(desiredScale, safeMinScale, maxScale);
                 const activeIds = new Set(resizing.blockIds);
+                const targetRects = layout.blocks
+                    .filter((block) => !activeIds.has(block.id))
+                    .map((block) => ({
+                        x: block.x,
+                        y: block.y,
+                        w: block.w,
+                        h: block.h,
+                    }));
+                const snappedResize = getSnappedUniformResizeScale({
+                    desiredScale: clamp(desiredScale, safeMinScale, maxScale),
+                    minScale: safeMinScale,
+                    maxScale,
+                    bounds: resizing.bounds,
+                    targetRects,
+                    thresholdX: SNAP_THRESHOLD_PX / Math.max(1, safeArea.w),
+                    thresholdY: SNAP_THRESHOLD_PX / Math.max(1, safeArea.h),
+                });
+                const uniformScale = snappedResize.scale;
+                setSnapGuide({
+                    x: snappedResize.guideX,
+                    y: snappedResize.guideY,
+                });
 
                 onLayoutChange((prev) => ({
                     ...prev,
@@ -669,16 +871,31 @@ export function PageCanvasStage({
                 cropPreview && cropPreview.blockId === cropping.blockId
                     ? cropPreview.crop
                     : cropping.drag.startCrop;
+            const previewRect =
+                cropPreview && cropPreview.blockId === cropping.blockId
+                    ? { x: cropPreview.x, y: cropPreview.y, w: cropPreview.w, h: cropPreview.h }
+                    : cropping.drag.startRect;
             onLayoutChange((prev) => ({
                 ...prev,
                 blocks: prev.blocks.map((block) =>
                     block.id === cropping.blockId
-                        ? buildVisualCropBlockForEdge(
-                            block,
-                            nextCrop,
-                            MIN_BLOCK_SIZE,
-                            cropping.drag.edge,
-                        )
+                        ? block.type === "text"
+                            ? {
+                                ...block,
+                                x: previewRect.x,
+                                y: previewRect.y,
+                                w: previewRect.w,
+                                h: previewRect.h,
+                                aspectRatio: previewRect.h > 0
+                                    ? previewRect.w / previewRect.h
+                                    : block.aspectRatio,
+                            }
+                            : buildVisualCropBlockForEdge(
+                                block,
+                                nextCrop,
+                                MIN_BLOCK_SIZE,
+                                cropping.drag.edge,
+                            )
                         : block,
                 ),
             }));
@@ -688,6 +905,7 @@ export function PageCanvasStage({
         setResizing(null);
         setCropping(null);
         setCropPreview(null);
+        setSnapGuide({ x: null, y: null });
     }, [cropPreview, cropping, onLayoutChange]);
 
     const handleResizePointerDown = useCallback(
@@ -813,6 +1031,12 @@ export function PageCanvasStage({
                 >
                     + Profile Page
                 </button>
+                <button
+                    onClick={() => addBlock("resume")}
+                    className="rounded-lg border border-neutral-700 bg-neutral-800 px-3 py-1.5 text-xs font-medium transition-colors hover:bg-neutral-700"
+                >
+                    + Resume
+                </button>
                 <span className="text-[10px] text-neutral-500">
                     Shift + Click untuk multi-select
                 </span>
@@ -844,6 +1068,16 @@ export function PageCanvasStage({
                 onPointerLeave={handlePointerUp}
                 onClick={() => applySelection([])}
             >
+                {finalRenderPreviewSrc && !isTransforming && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                        src={finalRenderPreviewSrc}
+                        alt="Final render preview"
+                        className="pointer-events-none absolute inset-0 h-full w-full"
+                        draggable={false}
+                    />
+                )}
+
                 <div
                     className="pointer-events-none absolute border border-dashed border-neutral-300/30"
                     style={{
@@ -854,14 +1088,34 @@ export function PageCanvasStage({
                     }}
                 />
 
+                {snapGuide.x !== null && (
+                    <div
+                        className="pointer-events-none absolute bottom-0 top-0 w-px bg-sky-400/90"
+                        style={{
+                            left: safeArea.x + snapGuide.x * safeArea.w,
+                            zIndex: 9996,
+                        }}
+                    />
+                )}
+                {snapGuide.y !== null && (
+                    <div
+                        className="pointer-events-none absolute left-0 right-0 h-px bg-sky-400/90"
+                        style={{
+                            top: safeArea.y + snapGuide.y * safeArea.h,
+                            zIndex: 9996,
+                        }}
+                    />
+                )}
+
                 {sortedBlocks.map((block) => {
                     const isSelected = selectedBlockIdSet.has(block.id);
                     const isPrimarySelection = selectedBlockId === block.id;
                     const isVisual = isVisualBlock(block);
-                    const canCrop = isVisual
-                        && (block.type === "image"
-                            ? Boolean(block.assetPath)
-                            : Boolean(sanitizeSvgCode(block.svgCode)));
+                    const canCrop = block.type === "text"
+                        || (isVisual
+                            && (block.type === "image"
+                                ? Boolean(block.assetPath)
+                                : Boolean(sanitizeSvgCode(block.svgCode))));
                     const previewForBlock =
                         cropPreview && cropPreview.blockId === block.id ? cropPreview : null;
                     const previewX = previewForBlock ? previewForBlock.x : block.x;
@@ -897,7 +1151,7 @@ export function PageCanvasStage({
                             onPointerDown={(e) => handlePointerDown(e, block)}
                             onClick={(e) => e.stopPropagation()}
                         >
-                            {block.type === "text" ? (
+                            {showInlinePreview && block.type === "text" ? (
                                 <div
                                     className="h-full w-full overflow-hidden"
                                     style={{
@@ -910,11 +1164,14 @@ export function PageCanvasStage({
                                         color: block.style.color,
                                         lineHeight: block.style.lineHeight,
                                         fontFamily: block.style.fontFamily,
+                                        whiteSpace: "pre-wrap",
+                                        overflowWrap: "anywhere",
+                                        wordBreak: "break-word",
                                     }}
                                 >
                                     {block.content || "..."}
                                 </div>
-                            ) : block.type === "image" ? (
+                            ) : showInlinePreview && block.type === "image" ? (
                                 <div className="flex h-full w-full items-center justify-center overflow-hidden bg-neutral-200">
                                     {block.assetPath ? (
                                         block.shape === "circle" ? (
@@ -946,7 +1203,7 @@ export function PageCanvasStage({
                                         </span>
                                     )}
                                 </div>
-                            ) : block.type === "svg" ? (
+                            ) : showInlinePreview && block.type === "svg" ? (
                                 <div className="flex h-full w-full items-center justify-center">
                                     {(() => {
                                         const sanitized = sanitizeSvgCode(block.svgCode);
@@ -968,10 +1225,12 @@ export function PageCanvasStage({
                                         );
                                     })()}
                                 </div>
-                            ) : (
+                            ) : showInlinePreview ? (
                                 <div className="flex h-full w-full items-center justify-center bg-neutral-900/40">
                                     <span className="text-xs text-neutral-400">Tipe blok lama</span>
                                 </div>
+                            ) : (
+                                <div className="h-full w-full" />
                             )}
 
                             {block.linkUrl && (

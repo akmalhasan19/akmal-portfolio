@@ -640,7 +640,7 @@ export function BlockInspector({
                                 value={selectedBlock.style.textAlign}
                                 onChange={(e) =>
                                     updateTextStyle(selectedBlock.id, {
-                                        textAlign: e.target.value as "left" | "center" | "right",
+                                        textAlign: e.target.value as "left" | "center" | "right" | "justify",
                                     })
                                 }
                                 className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs outline-none focus:border-amber-500"
@@ -648,6 +648,7 @@ export function BlockInspector({
                                 <option value="left">Left</option>
                                 <option value="center">Center</option>
                                 <option value="right">Right</option>
+                                <option value="justify">Rata kanan-kiri</option>
                             </select>
                         </div>
                         <div className="space-y-0.5">

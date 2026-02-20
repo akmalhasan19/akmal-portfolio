@@ -38,6 +38,32 @@ interface PendingSave {
     layout: PageSideLayout;
 }
 
+function stripSvgCropFromLayout(layout: PageSideLayout): {
+    layout: PageSideLayout;
+    changed: boolean;
+} {
+    let changed = false;
+    const cleanedBlocks = layout.blocks.map((block) => {
+        if (block.type !== "svg" || !block.crop) {
+            return block;
+        }
+        changed = true;
+        return {
+            ...block,
+            crop: undefined,
+            aspectRatio: block.h > 0 ? block.w / block.h : block.aspectRatio,
+        };
+    });
+
+    return {
+        layout: {
+            ...layout,
+            blocks: cleanedBlocks,
+        },
+        changed,
+    };
+}
+
 export function Book2PageEditor() {
     const pageIndex = useAtomValue(selectedPageIndexAtom);
     const side = useAtomValue(selectedSideAtom);
@@ -187,16 +213,25 @@ export function Book2PageEditor() {
                 backgroundColor: BOOK_PAPER_TONE,
             };
             const { layout: validatedFetchedLayout } = validateLayout(fetchedLayoutRaw);
-            const fetchedLayout: PageSideLayout = {
+            const normalizedLayout: PageSideLayout = {
                 ...validatedFetchedLayout,
                 backgroundColor: normalizePaperBackground(
                     validatedFetchedLayout.backgroundColor,
                 ),
             };
+            const cleaned = stripSvgCropFromLayout(normalizedLayout);
 
-            setLayout(fetchedLayout);
+            setLayout(cleaned.layout);
             setDirty(false);
             setLoading(false);
+
+            if (cleaned.changed) {
+                pendingSaveRef.current = {
+                    context: { pageIndex, side },
+                    layout: cleaned.layout,
+                };
+                void saveLayout(cleaned.layout, { pageIndex, side });
+            }
         };
 
         fetchLayout();
@@ -215,6 +250,7 @@ export function Book2PageEditor() {
         setSaving,
         setSide,
         flushPendingSaveInBackground,
+        saveLayout,
     ]);
 
     const handleLayoutChange = useCallback(
