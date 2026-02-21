@@ -1074,25 +1074,28 @@ export function BlockInspector({
                 )}
             </div>
 
-            <div className="space-y-1">
-                <label className="text-xs text-neutral-500">
-                    Link Blok (Opsional)
-                </label>
-                <input
-                    type="text"
-                    value={selectedBlock.linkUrl ?? ""}
-                    onChange={(e) =>
-                        updateBlock(selectedBlock.id, {
-                            linkUrl: e.target.value,
-                        })
-                    }
-                    placeholder="https://example.com"
-                    className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs outline-none focus:border-sky-500"
-                />
-                <p className="text-[10px] text-neutral-500">
-                    Jika diisi, area blok ini akan bisa diklik pada tampilan 3D.
-                </p>
-            </div>
+            {/* ── Link URL (semua blok selain text) ── */}
+            {selectedBlock.type !== "text" && (
+                <div className="space-y-1">
+                    <label className="text-xs text-neutral-500">
+                        Link Blok (Opsional)
+                    </label>
+                    <input
+                        type="text"
+                        value={selectedBlock.linkUrl ?? ""}
+                        onChange={(e) =>
+                            updateBlock(selectedBlock.id, {
+                                linkUrl: e.target.value,
+                            })
+                        }
+                        placeholder="https://example.com"
+                        className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs outline-none focus:border-sky-500"
+                    />
+                    <p className="text-[10px] text-neutral-500">
+                        Jika diisi, area blok ini akan bisa diklik pada tampilan 3D dan membuka link di tab baru.
+                    </p>
+                </div>
+            )}
 
             {/* ── Text-specific controls ────────── */}
             {selectedBlock.type === "text" && (
