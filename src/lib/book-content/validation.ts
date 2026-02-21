@@ -1,4 +1,5 @@
 import type {
+    BlockOutline,
     LayoutBlock,
     LinkStyleConfig,
     PageSideLayout,
@@ -24,12 +25,39 @@ const MAX_LINK_FONT_SIZE = 96;
 const MIN_LINK_BORDER_RADIUS = 0;
 const MAX_LINK_BORDER_RADIUS = 200;
 
+const MIN_OUTLINE_WIDTH = 1;
+const MAX_OUTLINE_WIDTH = 100;
+
+const MIN_CORNER_RADIUS = 0;
+const MAX_CORNER_RADIUS = 500;
+const MIN_SHAPE_STROKE_WIDTH = 0;
+const MAX_SHAPE_STROKE_WIDTH = 100;
+
 function toFiniteNumber(value: unknown, fallback = 0): number {
     return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
 function clamp(value: number, min: number, max: number): number {
     return Math.min(max, Math.max(min, value));
+}
+
+function validateBlockOutline(outline: unknown): BlockOutline | undefined {
+    if (!outline || typeof outline !== "object") {
+        return undefined;
+    }
+
+    const candidate = outline as Partial<Record<keyof BlockOutline, unknown>>;
+    const color =
+        typeof candidate.color === "string" && candidate.color.trim()
+            ? candidate.color
+            : undefined;
+    if (!color) {
+        return undefined;
+    }
+
+    const rawWidth = toFiniteNumber(candidate.width, 2);
+    const width = clamp(Math.round(rawWidth), MIN_OUTLINE_WIDTH, MAX_OUTLINE_WIDTH);
+    return { color, width };
 }
 
 function validateBlockLinkUrl(linkUrl: unknown): string {
@@ -192,12 +220,25 @@ export function validateLayout(layout: PageSideLayout): ValidationResult {
             && type !== "image"
             && type !== "svg"
             && type !== "link"
+            && type !== "shape"
         ) {
             errors.push(`Tipe blok tidak dikenali: ${type || "unknown"}. Blok diabaikan.`);
             continue;
         }
 
         const clamped = clampNormalizedRect(rawBlock as LayoutBlock);
+
+        const outline = validateBlockOutline(
+            (clamped as { outline?: unknown }).outline,
+        );
+        const rawCornerRadius = toFiniteNumber(
+            (clamped as { cornerRadius?: unknown }).cornerRadius,
+            0,
+        );
+        const cornerRadius =
+            rawCornerRadius > 0
+                ? clamp(Math.round(rawCornerRadius), MIN_CORNER_RADIUS, MAX_CORNER_RADIUS)
+                : undefined;
 
         if (clamped.type === "text") {
             validatedBlocks.push({
@@ -208,6 +249,8 @@ export function validateLayout(layout: PageSideLayout): ValidationResult {
                 ),
                 style: validateTextStyle(clamped.style),
                 linkUrl: validateBlockLinkUrl(clamped.linkUrl),
+                outline,
+                cornerRadius,
             });
             continue;
         }
@@ -222,6 +265,8 @@ export function validateLayout(layout: PageSideLayout): ValidationResult {
                 aspectRatio: normalizeAspectRatio(svgAspectRatio, clamped.w / clamped.h),
                 linkUrl: validateBlockLinkUrl(clamped.linkUrl),
                 crop: validateVisualCrop((clamped as { crop?: unknown }).crop),
+                outline,
+                cornerRadius,
             });
             continue;
         }
@@ -234,6 +279,40 @@ export function validateLayout(layout: PageSideLayout): ValidationResult {
                 shape: clamped.shape === "circle" ? "circle" : "rect",
                 linkUrl: validateBlockLinkUrl(clamped.linkUrl),
                 crop: validateVisualCrop((clamped as { crop?: unknown }).crop),
+                outline,
+                cornerRadius,
+            });
+            continue;
+        }
+
+        if (clamped.type === "shape") {
+            validatedBlocks.push({
+                ...clamped,
+                shapeType:
+                    clamped.shapeType === "circle"
+                    || clamped.shapeType === "triangle"
+                    || clamped.shapeType === "diamond"
+                    || clamped.shapeType === "pill"
+                        ? clamped.shapeType
+                        : "rectangle",
+                fillColor:
+                    typeof clamped.fillColor === "string" && clamped.fillColor.trim()
+                        ? clamped.fillColor
+                        : "transparent",
+                strokeColor:
+                    typeof clamped.strokeColor === "string" && clamped.strokeColor.trim()
+                        ? clamped.strokeColor
+                        : "#000000",
+                strokeWidth: clamp(
+                    toFiniteNumber(clamped.strokeWidth, 0),
+                    MIN_SHAPE_STROKE_WIDTH,
+                    MAX_SHAPE_STROKE_WIDTH,
+                ),
+                content: clamped.content ?? "",
+                style: validateTextStyle(clamped.style),
+                linkUrl: validateBlockLinkUrl(clamped.linkUrl),
+                outline,
+                cornerRadius,
             });
             continue;
         }
@@ -245,6 +324,8 @@ export function validateLayout(layout: PageSideLayout): ValidationResult {
             url: sanitizeLinkUrl(clamped.url || clamped.linkUrl || ""),
             linkUrl: normalizedLinkUrl,
             style: validateLinkStyle(clamped.style),
+            outline,
+            cornerRadius,
         });
     }
 

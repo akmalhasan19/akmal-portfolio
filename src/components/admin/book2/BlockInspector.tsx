@@ -945,6 +945,135 @@ export function BlockInspector({
                 />
             </div>
 
+            {/* ── Corner Radius ── */}
+            {selectedBlock.type !== "link" && (
+                <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                        <label className="text-xs text-neutral-500">Corner Radius</label>
+                        <span className="text-[10px] text-neutral-600">
+                            {(selectedBlock.cornerRadius ?? 0) === 0
+                                ? "Tajam"
+                                : `${selectedBlock.cornerRadius} px`}
+                        </span>
+                    </div>
+                    <input
+                        type="range"
+                        min="0"
+                        max="500"
+                        step="1"
+                        value={selectedBlock.cornerRadius ?? 0}
+                        onChange={(e) =>
+                            updateBlock(selectedBlock.id, {
+                                cornerRadius: parseInt(e.target.value),
+                            })
+                        }
+                        className="w-full accent-amber-500"
+                    />
+                    <input
+                        type="number"
+                        min="0"
+                        max="500"
+                        value={selectedBlock.cornerRadius ?? 0}
+                        onChange={(e) => {
+                            const parsed = parseInt(e.target.value);
+                            updateBlock(selectedBlock.id, {
+                                cornerRadius: Number.isFinite(parsed)
+                                    ? Math.min(500, Math.max(0, parsed))
+                                    : 0,
+                            });
+                        }}
+                        className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs outline-none focus:border-amber-500"
+                    />
+                </div>
+            )}
+
+            {/* ── Outline ── */}
+            <div className="space-y-2 rounded border border-neutral-800 bg-neutral-900/50 p-2.5">
+                <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-medium text-neutral-400">Outline</h4>
+                    <button
+                        type="button"
+                        onClick={() => {
+                            if (selectedBlock.outline) {
+                                updateBlock(selectedBlock.id, { outline: undefined });
+                            } else {
+                                updateBlock(selectedBlock.id, {
+                                    outline: { color: "#000000", width: 4 },
+                                });
+                            }
+                        }}
+                        className={[
+                            "rounded px-2 py-0.5 text-[10px] font-medium transition-colors",
+                            selectedBlock.outline
+                                ? "bg-amber-600/20 text-amber-400 border border-amber-600/40 hover:bg-amber-600/30"
+                                : "bg-neutral-800 text-neutral-400 border border-neutral-700 hover:bg-neutral-700",
+                        ].join(" ")}
+                    >
+                        {selectedBlock.outline ? "Aktif" : "Nonaktif"}
+                    </button>
+                </div>
+
+                {selectedBlock.outline && (
+                    <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-0.5">
+                            <label className="text-[10px] uppercase text-neutral-600">
+                                Warna
+                            </label>
+                            <div className="flex items-center gap-1.5">
+                                <input
+                                    type="color"
+                                    value={selectedBlock.outline.color}
+                                    onChange={(e) =>
+                                        updateBlock(selectedBlock.id, {
+                                            outline: {
+                                                ...selectedBlock.outline!,
+                                                color: e.target.value,
+                                            },
+                                        })
+                                    }
+                                    className="h-7 w-7 cursor-pointer rounded border border-neutral-700 bg-transparent"
+                                />
+                                <input
+                                    type="text"
+                                    value={selectedBlock.outline.color}
+                                    onChange={(e) =>
+                                        updateBlock(selectedBlock.id, {
+                                            outline: {
+                                                ...selectedBlock.outline!,
+                                                color: e.target.value,
+                                            },
+                                        })
+                                    }
+                                    className="flex-1 min-w-0 rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs outline-none focus:border-amber-500"
+                                />
+                            </div>
+                        </div>
+                        <div className="space-y-0.5">
+                            <label className="text-[10px] uppercase text-neutral-600">
+                                Ketebalan (px)
+                            </label>
+                            <input
+                                type="number"
+                                min="1"
+                                max="100"
+                                value={selectedBlock.outline.width}
+                                onChange={(e) => {
+                                    const parsed = parseInt(e.target.value);
+                                    if (!Number.isFinite(parsed)) return;
+                                    updateBlock(selectedBlock.id, {
+                                        outline: {
+                                            ...selectedBlock.outline!,
+                                            width: Math.min(100, Math.max(1, parsed)),
+                                        },
+                                    });
+                                }}
+                                className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs outline-none focus:border-amber-500"
+                            />
+                        </div>
+                    </div>
+                )}
+            </div>
+
             <div className="space-y-1">
                 <label className="text-xs text-neutral-500">
                     Link Blok (Opsional)

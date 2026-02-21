@@ -6,6 +6,8 @@ import type {
     ImageBlock,
     LayoutBlock,
     PageSideLayout,
+    ShapeBlock,
+    SvgBlock,
     TextBlock,
     VisualCrop,
 } from "@/types/book-content";
@@ -28,6 +30,7 @@ import {
     getSnappedCropForEdge,
 } from "@/lib/book-content/visual-crop-interaction";
 import { normalizeVisualCrop } from "@/lib/book-content/visual-crop";
+import { computeSafeArea } from "@/lib/book-content/padding";
 
 const CANVAS_DISPLAY_WIDTH = 600;
 const PAGE_ASPECT_RATIO = 1.71 / 1.28;
@@ -36,6 +39,7 @@ const MIN_BLOCK_SIZE = 0.05;
 const MIN_NUDGE_STEP = 0.001;
 const MAX_NUDGE_STEP = 0.2;
 const SNAP_THRESHOLD_PX = 8;
+const THIN_SNAP_THRESHOLD_PX = 4;
 
 interface BlockRect {
     x: number;
@@ -62,6 +66,15 @@ interface ResizeState {
 interface CropState {
     blockId: string;
     drag: CropDragState;
+}
+
+interface DistanceGuideState {
+    nearestBlockId: string;
+    fromX: number;
+    fromY: number;
+    toX: number;
+    toY: number;
+    distancePx: number;
 }
 
 interface PageCanvasStageProps {
@@ -127,6 +140,35 @@ function isVisualBlock(block: LayoutBlock): block is LayoutBlock & (
     return block.type === "image" || block.type === "svg";
 }
 
+function getShapeClipPath(shapeType: ShapeBlock["shapeType"]): string | undefined {
+    if (shapeType === "triangle") {
+        return "polygon(50% 0%, 100% 100%, 0% 100%)";
+    }
+    if (shapeType === "diamond") {
+        return "polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)";
+    }
+    return undefined;
+}
+
+function getPreviewBorderRadius(block: LayoutBlock): string {
+    if (block.type === "image" && block.shape === "circle") {
+        return "50%";
+    }
+    if (block.type === "shape") {
+        if (block.shapeType === "circle") {
+            return "50%";
+        }
+        if (block.shapeType === "pill") {
+            return "9999px";
+        }
+        if (block.shapeType === "rectangle") {
+            return `${(block.cornerRadius ?? 0) * 0.4}px`;
+        }
+        return "0px";
+    }
+    return `${(block.cornerRadius ?? 0) * 0.4}px`;
+}
+
 function getEdgeResizedRect(
     startRect: BlockRect,
     edge: VisualCropEdge,
@@ -161,6 +203,65 @@ function getEdgeResizedRect(
     };
 }
 
+interface PixelRect {
+    left: number;
+    top: number;
+    right: number;
+    bottom: number;
+}
+
+function toPixelRect(rect: BlockRect, safeArea: { x: number; y: number; w: number; h: number }): PixelRect {
+    const left = safeArea.x + rect.x * safeArea.w;
+    const top = safeArea.y + rect.y * safeArea.h;
+    return {
+        left,
+        top,
+        right: left + rect.w * safeArea.w,
+        bottom: top + rect.h * safeArea.h,
+    };
+}
+
+function getClosestAxisPoints(
+    aStart: number,
+    aEnd: number,
+    bStart: number,
+    bEnd: number,
+): { a: number; b: number } {
+    if (aEnd < bStart) {
+        return { a: aEnd, b: bStart };
+    }
+    if (bEnd < aStart) {
+        return { a: aStart, b: bEnd };
+    }
+
+    const overlapStart = Math.max(aStart, bStart);
+    const overlapEnd = Math.min(aEnd, bEnd);
+    const anchor = (overlapStart + overlapEnd) * 0.5;
+    return { a: anchor, b: anchor };
+}
+
+function getClosestRectConnection(
+    source: PixelRect,
+    target: PixelRect,
+): { fromX: number; fromY: number; toX: number; toY: number; distancePx: number } {
+    const x = getClosestAxisPoints(source.left, source.right, target.left, target.right);
+    const y = getClosestAxisPoints(source.top, source.bottom, target.top, target.bottom);
+    const dx = x.b - x.a;
+    const dy = y.b - y.a;
+
+    return {
+        fromX: x.a,
+        fromY: y.a,
+        toX: x.b,
+        toY: y.b,
+        distancePx: Math.hypot(dx, dy),
+    };
+}
+
+function formatDistanceLabel(distancePx: number): string {
+    return `${Math.max(0, Math.round(distancePx))}px`;
+}
+
 export function PageCanvasStage({
     layout,
     onLayoutChange,
@@ -176,9 +277,11 @@ export function PageCanvasStage({
     );
 
     const stageRef = useRef<HTMLDivElement>(null);
+    const clipboardRef = useRef<LayoutBlock[]>([]);
     const [dragging, setDragging] = useState<DragState | null>(null);
     const [resizing, setResizing] = useState<ResizeState | null>(null);
     const [cropping, setCropping] = useState<CropState | null>(null);
+    const [thinSnapEnabled, setThinSnapEnabled] = useState(true);
     const [cropPreview, setCropPreview] = useState<{
         blockId: string;
         crop: VisualCrop;
@@ -191,6 +294,16 @@ export function PageCanvasStage({
         x: null,
         y: null,
     });
+    const safeNudgeStep = useMemo(
+        () =>
+            clamp(
+                Number.isFinite(nudgeStep) ? nudgeStep : 0.01,
+                MIN_NUDGE_STEP,
+                MAX_NUDGE_STEP,
+            ),
+        [nudgeStep],
+    );
+    const snapThresholdPx = thinSnapEnabled ? THIN_SNAP_THRESHOLD_PX : SNAP_THRESHOLD_PX;
     const multiSelectedBounds = useMemo(() => {
         if (selectedBlockIds.length <= 1) {
             return null;
@@ -201,6 +314,79 @@ export function PageCanvasStage({
             .map((block) => ({ x: block.x, y: block.y, w: block.w, h: block.h }));
         return getBounds(rects);
     }, [layout.blocks, selectedBlockIds]);
+
+    const safeArea = useMemo(
+        () =>
+            computeSafeArea(
+                CANVAS_DISPLAY_WIDTH,
+                CANVAS_DISPLAY_HEIGHT,
+                layout.paddingOverride,
+            ),
+        [layout.paddingOverride],
+    );
+    const primarySelectedBounds = useMemo(() => {
+        if (selectedBlockIds.length === 0) {
+            return null;
+        }
+        if (multiSelectedBounds) {
+            return multiSelectedBounds;
+        }
+
+        const primaryId = selectedBlockId && selectedBlockIds.includes(selectedBlockId)
+            ? selectedBlockId
+            : (selectedBlockIds[selectedBlockIds.length - 1] ?? null);
+        if (!primaryId) {
+            return null;
+        }
+
+        if (cropPreview && cropPreview.blockId === primaryId) {
+            return {
+                x: cropPreview.x,
+                y: cropPreview.y,
+                w: cropPreview.w,
+                h: cropPreview.h,
+            };
+        }
+
+        const selectedBlock = layout.blocks.find((block) => block.id === primaryId);
+        if (!selectedBlock) {
+            return null;
+        }
+        return {
+            x: selectedBlock.x,
+            y: selectedBlock.y,
+            w: selectedBlock.w,
+            h: selectedBlock.h,
+        };
+    }, [cropPreview, layout.blocks, multiSelectedBounds, selectedBlockId, selectedBlockIds]);
+    const distanceGuide = useMemo<DistanceGuideState | null>(() => {
+        if (!primarySelectedBounds) {
+            return null;
+        }
+
+        const activeIds = new Set(selectedBlockIds);
+        const sourceRect = toPixelRect(primarySelectedBounds, safeArea);
+        let nearest: DistanceGuideState | null = null;
+
+        for (const block of layout.blocks) {
+            if (activeIds.has(block.id)) {
+                continue;
+            }
+            const targetRect = toPixelRect(
+                { x: block.x, y: block.y, w: block.w, h: block.h },
+                safeArea,
+            );
+            const connection = getClosestRectConnection(sourceRect, targetRect);
+            if (!nearest || connection.distancePx < nearest.distancePx) {
+                nearest = {
+                    nearestBlockId: block.id,
+                    ...connection,
+                };
+            }
+        }
+
+        return nearest;
+    }, [layout.blocks, primarySelectedBounds, safeArea, selectedBlockIds]);
 
     const applySelection = useCallback(
         (nextIds: string[], primaryId?: string | null) => {
@@ -245,7 +431,7 @@ export function PageCanvasStage({
     }, [applySelection, layout.blocks, selectedBlockId, selectedBlockIds]);
 
     const addBlock = useCallback(
-        (type: "text" | "image") => {
+        (type: "text" | "image" | "svg" | "shape") => {
             if (!canAddBlock(layout)) {
                 alert("Maksimal 20 blok per sisi halaman.");
                 return;
@@ -254,40 +440,81 @@ export function PageCanvasStage({
             const id = crypto.randomUUID();
             const maxZ = layout.blocks.reduce((max, b) => Math.max(max, b.zIndex), 0);
 
-            const newBlock: LayoutBlock =
-                type === "text"
-                    ? ({
-                        id,
-                        type: "text",
-                        x: 0.05,
-                        y: 0.05,
-                        w: 0.4,
-                        h: 0.15,
-                        aspectRatio: 0.4 / 0.15,
-                        zIndex: maxZ + 1,
-                        content: "Teks baru",
-                        style: {
-                            fontSize: 24,
-                            fontWeight: 400,
-                            textAlign: "left",
-                            color: "#000000",
-                            lineHeight: 1.4,
-                            fontFamily: "sans-serif",
-                            listType: "none",
-                        },
-                    } satisfies TextBlock)
-                    : ({
-                        id,
-                        type: "image",
-                        x: 0.05,
-                        y: 0.05,
-                        w: 0.4,
-                        h: 0.3,
-                        aspectRatio: 0.4 / 0.3,
-                        zIndex: maxZ + 1,
-                        assetPath: "",
-                        objectFit: "cover",
-                    } satisfies ImageBlock);
+            let newBlock: LayoutBlock;
+            if (type === "text") {
+                newBlock = {
+                    id,
+                    type: "text",
+                    x: 0.05,
+                    y: 0.05,
+                    w: 0.4,
+                    h: 0.15,
+                    aspectRatio: 0.4 / 0.15,
+                    zIndex: maxZ + 1,
+                    content: "Teks baru",
+                    style: {
+                        fontSize: 24,
+                        fontWeight: 400,
+                        textAlign: "left",
+                        color: "#000000",
+                        lineHeight: 1.4,
+                        fontFamily: "sans-serif",
+                        listType: "none",
+                    },
+                } satisfies TextBlock;
+            } else if (type === "image") {
+                newBlock = {
+                    id,
+                    type: "image",
+                    x: 0.05,
+                    y: 0.05,
+                    w: 0.4,
+                    h: 0.3,
+                    aspectRatio: 0.4 / 0.3,
+                    zIndex: maxZ + 1,
+                    assetPath: "",
+                    objectFit: "cover",
+                } satisfies ImageBlock;
+            } else if (type === "svg") {
+                newBlock = {
+                    id,
+                    type: "svg",
+                    x: 0.05,
+                    y: 0.05,
+                    w: 0.2,
+                    h: 0.2,
+                    aspectRatio: 1,
+                    zIndex: maxZ + 1,
+                    objectFit: "contain",
+                    svgCode:
+                        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#000000"><path d="M12 2L2 22h20L12 2z"/></svg>',
+                } satisfies SvgBlock;
+            } else {
+                newBlock = {
+                    id,
+                    type: "shape",
+                    x: 0.05,
+                    y: 0.05,
+                    w: 0.35,
+                    h: 0.2,
+                    aspectRatio: 0.35 / 0.2,
+                    zIndex: maxZ + 1,
+                    shapeType: "rectangle",
+                    fillColor: "#ffffff",
+                    strokeColor: "#000000",
+                    strokeWidth: 2,
+                    content: "Shape text",
+                    style: {
+                        fontSize: 24,
+                        fontWeight: 400,
+                        textAlign: "center",
+                        color: "#000000",
+                        lineHeight: 1.4,
+                        fontFamily: "sans-serif",
+                        listType: "none",
+                    },
+                } satisfies ShapeBlock;
+            }
 
             onLayoutChange((prev) => ({
                 ...prev,
@@ -309,6 +536,49 @@ export function PageCanvasStage({
         }));
         applySelection([]);
     }, [applySelection, onLayoutChange, selectedBlockIds]);
+
+    const copySelectedBlocks = useCallback(() => {
+        if (selectedBlockIds.length === 0) return;
+        const target = new Set(selectedBlockIds);
+        clipboardRef.current = layout.blocks.filter((b) => target.has(b.id));
+    }, [layout.blocks, selectedBlockIds]);
+
+    const pasteBlocks = useCallback(() => {
+        const source = clipboardRef.current;
+        if (source.length === 0) return;
+        if (!canAddBlock(layout)) return;
+
+        const maxZ = layout.blocks.reduce((z, b) => Math.max(z, b.zIndex), 0);
+        const OFFSET = 0.02;
+        const newBlocks: LayoutBlock[] = [];
+        const newIds: string[] = [];
+
+        for (let i = 0; i < source.length; i++) {
+            const block = source[i];
+            const id = crypto.randomUUID();
+            newIds.push(id);
+            newBlocks.push({
+                ...block,
+                id,
+                x: Math.min(block.x + OFFSET, 1 - block.w),
+                y: Math.min(block.y + OFFSET, 1 - block.h),
+                zIndex: maxZ + 1 + i,
+            } as LayoutBlock);
+        }
+
+        onLayoutChange((prev) => ({
+            ...prev,
+            blocks: [...prev.blocks, ...newBlocks],
+        }));
+        applySelection(newIds, newIds[0]);
+    }, [applySelection, layout, onLayoutChange]);
+
+    const duplicateSelectedBlocks = useCallback(() => {
+        if (selectedBlockIds.length === 0) return;
+        const target = new Set(selectedBlockIds);
+        clipboardRef.current = layout.blocks.filter((b) => target.has(b.id));
+        pasteBlocks();
+    }, [layout.blocks, pasteBlocks, selectedBlockIds]);
 
     const moveSelectedBlocks = useCallback(
         (deltaX: number, deltaY: number) => {
@@ -371,26 +641,40 @@ export function PageCanvasStage({
                 return;
             }
 
-            const safeStep = clamp(
-                Number.isFinite(nudgeStep) ? nudgeStep : 0.01,
-                MIN_NUDGE_STEP,
-                MAX_NUDGE_STEP,
-            );
+            const isCtrl = event.ctrlKey || event.metaKey;
+
+            if (isCtrl && event.key === "c") {
+                event.preventDefault();
+                copySelectedBlocks();
+                return;
+            }
+
+            if (isCtrl && event.key === "v") {
+                event.preventDefault();
+                pasteBlocks();
+                return;
+            }
+
+            if (isCtrl && event.key === "d") {
+                event.preventDefault();
+                duplicateSelectedBlocks();
+                return;
+            }
 
             let deltaX = 0;
             let deltaY = 0;
             switch (event.key) {
                 case "ArrowUp":
-                    deltaY = -safeStep;
+                    deltaY = -safeNudgeStep;
                     break;
                 case "ArrowDown":
-                    deltaY = safeStep;
+                    deltaY = safeNudgeStep;
                     break;
                 case "ArrowLeft":
-                    deltaX = -safeStep;
+                    deltaX = -safeNudgeStep;
                     break;
                 case "ArrowRight":
-                    deltaX = safeStep;
+                    deltaX = safeNudgeStep;
                     break;
                 default:
                     return;
@@ -404,7 +688,7 @@ export function PageCanvasStage({
         return () => {
             window.removeEventListener("keydown", handleKeyDown);
         };
-    }, [deleteSelectedBlocks, moveSelectedBlocks, nudgeStep, selectedBlockIds.length]);
+    }, [copySelectedBlocks, deleteSelectedBlocks, duplicateSelectedBlocks, moveSelectedBlocks, pasteBlocks, safeNudgeStep, selectedBlockIds.length]);
 
     const handlePointerDown = useCallback(
         (e: React.PointerEvent, block: LayoutBlock) => {
@@ -457,7 +741,7 @@ export function PageCanvasStage({
 
     const handleCropPointerDown = useCallback(
         (e: React.PointerEvent, block: LayoutBlock, edge: VisualCropEdge) => {
-            if (block.type !== "text" && !isVisualBlock(block)) {
+            if (block.type !== "text" && block.type !== "shape" && !isVisualBlock(block)) {
                 return;
             }
 
@@ -481,7 +765,7 @@ export function PageCanvasStage({
                     startRect: { x: block.x, y: block.y, w: block.w, h: block.h },
                 },
             });
-            const previewBlock = block.type === "text"
+            const previewBlock = block.type === "text" || block.type === "shape"
                 ? getEdgeResizedRect(
                     { x: block.x, y: block.y, w: block.w, h: block.h },
                     edge,
@@ -516,9 +800,11 @@ export function PageCanvasStage({
                     return;
                 }
 
-                if (source.type === "text") {
-                    const deltaX = (e.clientX - cropping.drag.startX) / CANVAS_DISPLAY_WIDTH;
-                    const deltaY = (e.clientY - cropping.drag.startY) / CANVAS_DISPLAY_HEIGHT;
+                if (source.type === "text" || source.type === "shape") {
+                    const deltaX =
+                        safeArea.w > 0 ? (e.clientX - cropping.drag.startX) / safeArea.w : 0;
+                    const deltaY =
+                        safeArea.h > 0 ? (e.clientY - cropping.drag.startY) / safeArea.h : 0;
                     const previewRect = getEdgeResizedRect(
                         cropping.drag.startRect,
                         cropping.drag.edge,
@@ -542,8 +828,8 @@ export function PageCanvasStage({
                     cropping.drag,
                     e.clientX,
                     e.clientY,
-                    CANVAS_DISPLAY_WIDTH,
-                    CANVAS_DISPLAY_HEIGHT,
+                    safeArea.w,
+                    safeArea.h,
                 );
                 const targetRects = layout.blocks
                     .filter((block) => block.id !== cropping.blockId)
@@ -553,13 +839,14 @@ export function PageCanvasStage({
                         w: block.w,
                         h: block.h,
                     }));
+                targetRects.push({ x: 0, y: 0, w: 1, h: 1 });
                 const snappedCrop = getSnappedCropForEdge(
                     source,
                     nextCrop,
                     cropping.drag.edge,
                     targetRects,
-                    SNAP_THRESHOLD_PX / CANVAS_DISPLAY_WIDTH,
-                    SNAP_THRESHOLD_PX / CANVAS_DISPLAY_HEIGHT,
+                    snapThresholdPx / Math.max(1, safeArea.w),
+                    snapThresholdPx / Math.max(1, safeArea.h),
                     MIN_BLOCK_SIZE,
                 );
                 const previewBlock = buildVisualCropBlockForEdge(
@@ -584,8 +871,10 @@ export function PageCanvasStage({
             }
 
             if (dragging) {
-                const rawDx = (e.clientX - dragging.startX) / CANVAS_DISPLAY_WIDTH;
-                const rawDy = (e.clientY - dragging.startY) / CANVAS_DISPLAY_HEIGHT;
+                const rawDx =
+                    safeArea.w > 0 ? (e.clientX - dragging.startX) / safeArea.w : 0;
+                const rawDy =
+                    safeArea.h > 0 ? (e.clientY - dragging.startY) / safeArea.h : 0;
 
                 const originRects = Object.values(dragging.origins);
                 if (originRects.length > 0) {
@@ -612,13 +901,14 @@ export function PageCanvasStage({
                             w: block.w,
                             h: block.h,
                         }));
+                    targetRects.push({ x: 0, y: 0, w: 1, h: 1 });
                     const snapped = getSnappedDragDelta({
                         proposedDx,
                         proposedDy,
                         movingRects: originRects,
                         targetRects,
-                        thresholdX: SNAP_THRESHOLD_PX / CANVAS_DISPLAY_WIDTH,
-                        thresholdY: SNAP_THRESHOLD_PX / CANVAS_DISPLAY_HEIGHT,
+                        thresholdX: snapThresholdPx / Math.max(1, safeArea.w),
+                        thresholdY: snapThresholdPx / Math.max(1, safeArea.h),
                     });
                     const appliedDx = clamp(snapped.dx, minDx, maxDx);
                     const appliedDy = clamp(snapped.dy, minDy, maxDy);
@@ -648,8 +938,10 @@ export function PageCanvasStage({
             }
 
             if (resizing) {
-                const rawDx = (e.clientX - resizing.startX) / CANVAS_DISPLAY_WIDTH;
-                const rawDy = (e.clientY - resizing.startY) / CANVAS_DISPLAY_HEIGHT;
+                const rawDx =
+                    safeArea.w > 0 ? (e.clientX - resizing.startX) / safeArea.w : 0;
+                const rawDy =
+                    safeArea.h > 0 ? (e.clientY - resizing.startY) / safeArea.h : 0;
                 const scaleByX =
                     resizing.bounds.w > 0
                         ? (resizing.bounds.w + rawDx) / resizing.bounds.w
@@ -686,14 +978,15 @@ export function PageCanvasStage({
                         w: block.w,
                         h: block.h,
                     }));
+                targetRects.push({ x: 0, y: 0, w: 1, h: 1 });
                 const snappedResize = getSnappedUniformResizeScale({
                     desiredScale: clamp(desiredScale, safeMinScale, maxScale),
                     minScale: safeMinScale,
                     maxScale,
                     bounds: resizing.bounds,
                     targetRects,
-                    thresholdX: SNAP_THRESHOLD_PX / CANVAS_DISPLAY_WIDTH,
-                    thresholdY: SNAP_THRESHOLD_PX / CANVAS_DISPLAY_HEIGHT,
+                    thresholdX: snapThresholdPx / Math.max(1, safeArea.w),
+                    thresholdY: snapThresholdPx / Math.max(1, safeArea.h),
                 });
                 const uniformScale = snappedResize.scale;
                 setSnapGuide({
@@ -739,7 +1032,7 @@ export function PageCanvasStage({
                 }));
             }
         },
-        [cropping, dragging, layout.blocks, onLayoutChange, resizing],
+        [cropping, dragging, layout.blocks, onLayoutChange, resizing, safeArea.h, safeArea.w, snapThresholdPx],
     );
 
     const handlePointerUp = useCallback(() => {
@@ -756,7 +1049,7 @@ export function PageCanvasStage({
                 ...prev,
                 blocks: prev.blocks.map((block) =>
                     block.id === cropping.blockId
-                        ? block.type === "text"
+                        ? block.type === "text" || block.type === "shape"
                             ? {
                                 ...block,
                                 x: previewRect.x,
@@ -897,9 +1190,31 @@ export function PageCanvasStage({
                 >
                     + Gambar
                 </button>
+                <button
+                    onClick={() => addBlock("svg")}
+                    className="rounded-lg border border-neutral-700 bg-neutral-800 px-3 py-1.5 text-xs font-medium transition-colors hover:bg-neutral-700"
+                >
+                    + SVG
+                </button>
+                <button
+                    onClick={() => addBlock("shape")}
+                    className="rounded-lg border border-neutral-700 bg-neutral-800 px-3 py-1.5 text-xs font-medium transition-colors hover:bg-neutral-700"
+                >
+                    + Shape
+                </button>
                 <span className="text-[10px] text-neutral-500">
                     Shift + Click untuk multi-select
                 </span>
+                <button
+                    type="button"
+                    onClick={() => setThinSnapEnabled((prev) => !prev)}
+                    className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${thinSnapEnabled
+                        ? "border-sky-500/60 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20"
+                        : "border-neutral-700 bg-neutral-800 text-neutral-200 hover:bg-neutral-700"
+                        }`}
+                >
+                    Snap Tipis {thinSnapEnabled ? "On" : "Off"}
+                </button>
                 {selectedBlockIds.length > 1 && (
                     <span className="rounded border border-amber-700/50 bg-amber-900/20 px-2 py-1 text-[10px] font-medium text-amber-300">
                         {selectedBlockIds.length} blok dipilih
@@ -931,10 +1246,10 @@ export function PageCanvasStage({
                 <div
                     className="pointer-events-none absolute border border-dashed border-neutral-300/30"
                     style={{
-                        left: `${8}%`,
-                        top: `${10}%`,
-                        width: `${84}%`,
-                        height: `${80}%`,
+                        left: `${safeArea.x}px`,
+                        top: `${safeArea.y}px`,
+                        width: `${safeArea.w}px`,
+                        height: `${safeArea.h}px`,
                     }}
                 />
 
@@ -942,7 +1257,7 @@ export function PageCanvasStage({
                     <div
                         className="pointer-events-none absolute bottom-0 top-0 w-px bg-sky-400/90"
                         style={{
-                            left: `${snapGuide.x * 100}%`,
+                            left: `${safeArea.x + snapGuide.x * safeArea.w}px`,
                             zIndex: 9996,
                         }}
                     />
@@ -951,53 +1266,107 @@ export function PageCanvasStage({
                     <div
                         className="pointer-events-none absolute left-0 right-0 h-px bg-sky-400/90"
                         style={{
-                            top: `${snapGuide.y * 100}%`,
+                            top: `${safeArea.y + snapGuide.y * safeArea.h}px`,
                             zIndex: 9996,
                         }}
                     />
                 )}
+                {distanceGuide && (
+                    <>
+                        <svg
+                            className="pointer-events-none absolute inset-0"
+                            style={{ zIndex: 9994 }}
+                            aria-hidden="true"
+                        >
+                            <line
+                                x1={distanceGuide.fromX}
+                                y1={distanceGuide.fromY}
+                                x2={distanceGuide.toX}
+                                y2={distanceGuide.toY}
+                                stroke="rgba(110, 231, 183, 0.95)"
+                                strokeWidth={1.5}
+                                strokeDasharray="4 3"
+                            />
+                            <circle
+                                cx={distanceGuide.fromX}
+                                cy={distanceGuide.fromY}
+                                r={2}
+                                fill="rgba(110, 231, 183, 0.95)"
+                            />
+                            <circle
+                                cx={distanceGuide.toX}
+                                cy={distanceGuide.toY}
+                                r={2}
+                                fill="rgba(110, 231, 183, 0.95)"
+                            />
+                        </svg>
+                        <div
+                            className="pointer-events-none absolute rounded border border-emerald-300/40 bg-neutral-950/85 px-1.5 py-0.5 text-[10px] text-emerald-200"
+                            style={{
+                                left: (distanceGuide.fromX + distanceGuide.toX) * 0.5,
+                                top: (distanceGuide.fromY + distanceGuide.toY) * 0.5 - 10,
+                                transform: "translate(-50%, -50%)",
+                                zIndex: 9997,
+                            }}
+                        >
+                            {formatDistanceLabel(distanceGuide.distancePx)}
+                        </div>
+                    </>
+                )}
 
                 {sortedBlocks.map((block) => {
                     const isSelected = selectedBlockIdSet.has(block.id);
+                    const isNearestTarget = distanceGuide?.nearestBlockId === block.id;
                     const isPrimarySelection = selectedBlockId === block.id;
                     const isVisual = isVisualBlock(block);
                     const canCrop = block.type === "text"
+                        || block.type === "shape"
                         || (isVisual
                             && (block.type === "image"
                                 ? Boolean(block.assetPath)
                                 : Boolean(sanitizeSvgCode(block.svgCode))));
                     const previewForBlock =
                         cropPreview && cropPreview.blockId === block.id ? cropPreview : null;
-                    const left = (previewForBlock ? previewForBlock.x : block.x) * 100;
-                    const top = (previewForBlock ? previewForBlock.y : block.y) * 100;
-                    const width = (previewForBlock ? previewForBlock.w : block.w) * 100;
-                    const height = (previewForBlock ? previewForBlock.h : block.h) * 100;
+                    const previewX = previewForBlock ? previewForBlock.x : block.x;
+                    const previewY = previewForBlock ? previewForBlock.y : block.y;
+                    const previewW = previewForBlock ? previewForBlock.w : block.w;
+                    const previewH = previewForBlock ? previewForBlock.h : block.h;
+
+                    const left = safeArea.x + previewX * safeArea.w;
+                    const top = safeArea.y + previewY * safeArea.h;
+                    const width = previewW * safeArea.w;
+                    const height = previewH * safeArea.h;
                     const effectiveCrop = previewForBlock
                         ? previewForBlock.crop
                         : (isVisual ? block.crop : undefined);
+                    const outlineWidth = block.outline ? block.outline.width * 0.4 : 0;
 
                     return (
                         <div
                             key={block.id}
-                            className={`absolute cursor-move transition-shadow ${
-                                isSelected
-                                    ? "ring-2 ring-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.3)]"
-                                    : "hover:ring-1 hover:ring-neutral-400"
-                            }`}
+                            className={`absolute cursor-move transition-shadow ${isSelected
+                                ? "ring-2 ring-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.3)]"
+                                : isNearestTarget
+                                    ? "ring-1 ring-emerald-300/90 shadow-[0_0_10px_rgba(110,231,183,0.25)]"
+                                : "hover:ring-1 hover:ring-neutral-400"
+                                }`}
                             style={{
-                                left: `${left}%`,
-                                top: `${top}%`,
-                                width: `${width}%`,
-                                height: `${height}%`,
+                                left,
+                                top,
+                                width,
+                                height,
                                 zIndex: block.zIndex,
+                                borderRadius: getPreviewBorderRadius(block),
+                                outline: block.outline ? `${outlineWidth}px solid ${block.outline.color}` : undefined,
                             }}
                             onPointerDown={(e) => handlePointerDown(e, block)}
                             onClick={(e) => e.stopPropagation()}
                         >
                             {block.type === "text" ? (
                                 <div
-                                    className="h-full w-full overflow-hidden p-1"
+                                    className="h-full w-full overflow-hidden"
                                     style={{
+                                        borderRadius: "inherit",
                                         fontSize: `${Math.max(8, block.style.fontSize * 0.4)}px`,
                                         fontWeight: block.style.fontWeight,
                                         textAlign: block.style.textAlign,
@@ -1014,7 +1383,10 @@ export function PageCanvasStage({
                                     {block.content || "..."}
                                 </div>
                             ) : block.type === "image" ? (
-                                <div className="flex h-full w-full items-center justify-center bg-neutral-200">
+                                <div
+                                    className="flex h-full w-full items-center justify-center overflow-hidden bg-neutral-200"
+                                    style={{ borderRadius: "inherit" }}
+                                >
                                     {block.assetPath ? (
                                         <VisualBlockPreview
                                             src={block.assetPath}
@@ -1029,7 +1401,10 @@ export function PageCanvasStage({
                                     )}
                                 </div>
                             ) : block.type === "svg" ? (
-                                <div className="flex h-full w-full items-center justify-center">
+                                <div
+                                    className="flex h-full w-full items-center justify-center overflow-hidden"
+                                    style={{ borderRadius: "inherit" }}
+                                >
                                     {(() => {
                                         const sanitized = sanitizeSvgCode(block.svgCode);
                                         const svgUrl = sanitized ? svgToDataUrl(sanitized) : null;
@@ -1050,8 +1425,103 @@ export function PageCanvasStage({
                                         );
                                     })()}
                                 </div>
+                            ) : block.type === "shape" ? (
+                                <div
+                                    className="relative h-full w-full overflow-hidden"
+                                    style={{
+                                        borderRadius: "inherit",
+                                        clipPath: getShapeClipPath(block.shapeType),
+                                    }}
+                                >
+                                    <svg
+                                        className="absolute inset-0 h-full w-full"
+                                        viewBox="0 0 100 100"
+                                        preserveAspectRatio="none"
+                                        aria-hidden="true"
+                                    >
+                                        {block.shapeType === "rectangle" && (
+                                            <rect
+                                                x="0"
+                                                y="0"
+                                                width="100"
+                                                height="100"
+                                                rx={Math.max(0, Math.min(50, (block.cornerRadius ?? 0) * 0.08))}
+                                                ry={Math.max(0, Math.min(50, (block.cornerRadius ?? 0) * 0.08))}
+                                                fill={block.fillColor || "transparent"}
+                                                stroke={block.strokeColor || "none"}
+                                                strokeWidth={Math.max(0, block.strokeWidth * 0.4)}
+                                                vectorEffect="non-scaling-stroke"
+                                            />
+                                        )}
+                                        {block.shapeType === "circle" && (
+                                            <ellipse
+                                                cx="50"
+                                                cy="50"
+                                                rx="50"
+                                                ry="50"
+                                                fill={block.fillColor || "transparent"}
+                                                stroke={block.strokeColor || "none"}
+                                                strokeWidth={Math.max(0, block.strokeWidth * 0.4)}
+                                                vectorEffect="non-scaling-stroke"
+                                            />
+                                        )}
+                                        {block.shapeType === "triangle" && (
+                                            <polygon
+                                                points="50,0 100,100 0,100"
+                                                fill={block.fillColor || "transparent"}
+                                                stroke={block.strokeColor || "none"}
+                                                strokeWidth={Math.max(0, block.strokeWidth * 0.4)}
+                                                vectorEffect="non-scaling-stroke"
+                                            />
+                                        )}
+                                        {block.shapeType === "diamond" && (
+                                            <polygon
+                                                points="50,0 100,50 50,100 0,50"
+                                                fill={block.fillColor || "transparent"}
+                                                stroke={block.strokeColor || "none"}
+                                                strokeWidth={Math.max(0, block.strokeWidth * 0.4)}
+                                                vectorEffect="non-scaling-stroke"
+                                            />
+                                        )}
+                                        {block.shapeType === "pill" && (
+                                            <rect
+                                                x="0"
+                                                y="0"
+                                                width="100"
+                                                height="100"
+                                                rx="50"
+                                                ry="50"
+                                                fill={block.fillColor || "transparent"}
+                                                stroke={block.strokeColor || "none"}
+                                                strokeWidth={Math.max(0, block.strokeWidth * 0.4)}
+                                                vectorEffect="non-scaling-stroke"
+                                            />
+                                        )}
+                                    </svg>
+                                    <div
+                                        className="absolute inset-0 flex items-center justify-center overflow-hidden px-2 py-1.5"
+                                        style={{
+                                            clipPath: getShapeClipPath(block.shapeType),
+                                            borderRadius: "inherit",
+                                            fontSize: `${Math.max(8, block.style.fontSize * 0.4)}px`,
+                                            fontWeight: block.style.fontWeight,
+                                            textAlign: "center",
+                                            color: block.style.color,
+                                            lineHeight: block.style.lineHeight,
+                                            fontFamily: block.style.fontFamily,
+                                            whiteSpace: "pre-wrap",
+                                            overflowWrap: "anywhere",
+                                            wordBreak: "break-word",
+                                        }}
+                                    >
+                                        {block.content || "..."}
+                                    </div>
+                                </div>
                             ) : (
-                                <div className="flex h-full w-full items-center justify-center bg-neutral-900/40">
+                                <div
+                                    className="flex h-full w-full items-center justify-center overflow-hidden bg-neutral-900/40"
+                                    style={{ borderRadius: "inherit" }}
+                                >
                                     <span className="text-xs text-neutral-400">
                                         Tipe blok tidak didukung
                                     </span>
@@ -1099,18 +1569,18 @@ export function PageCanvasStage({
                         <div
                             className="pointer-events-none absolute ring-2 ring-sky-300/90"
                             style={{
-                                left: `${multiSelectedBounds.x * 100}%`,
-                                top: `${multiSelectedBounds.y * 100}%`,
-                                width: `${multiSelectedBounds.w * 100}%`,
-                                height: `${multiSelectedBounds.h * 100}%`,
+                                left: `calc(${safeArea.x}px + ${multiSelectedBounds.x * 100}%)`,
+                                top: `calc(${safeArea.y}px + ${multiSelectedBounds.y * 100}%)`,
+                                width: `calc((100% - ${2 * safeArea.x}px) * ${multiSelectedBounds.w})`,
+                                height: `calc((100% - ${2 * safeArea.y}px) * ${multiSelectedBounds.h})`,
                                 zIndex: 9998,
                             }}
                         />
                         <div
                             className="absolute h-3 w-3 cursor-se-resize rounded-full border-2 border-neutral-900 bg-sky-300"
                             style={{
-                                left: `${(multiSelectedBounds.x + multiSelectedBounds.w) * 100}%`,
-                                top: `${(multiSelectedBounds.y + multiSelectedBounds.h) * 100}%`,
+                                left: `calc(${safeArea.x}px + ${(multiSelectedBounds.x + multiSelectedBounds.w) * 100}%)`,
+                                top: `calc(${safeArea.y}px + ${(multiSelectedBounds.y + multiSelectedBounds.h) * 100}%)`,
                                 transform: "translate(-50%, -50%)",
                                 zIndex: 9999,
                             }}

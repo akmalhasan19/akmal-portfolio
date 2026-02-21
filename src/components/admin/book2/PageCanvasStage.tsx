@@ -42,6 +42,7 @@ const MIN_BLOCK_SIZE = 0.05;
 const MIN_NUDGE_STEP = 0.001;
 const MAX_NUDGE_STEP = 0.2;
 const SNAP_THRESHOLD_PX = 8;
+const THIN_SNAP_THRESHOLD_PX = 4;
 const RESUME_BUTTON_SVG_CODE =
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 92" fill="none" data-block-role="resume-button">'
     + '<rect x="2" y="2" width="316" height="88" rx="12" fill="#0a0a0a" stroke="#f5f5f5" stroke-width="3"/>'
@@ -77,6 +78,15 @@ interface ResizeState {
 interface CropState {
     blockId: string;
     drag: CropDragState;
+}
+
+interface DistanceGuideState {
+    nearestBlockId: string;
+    fromX: number;
+    fromY: number;
+    toX: number;
+    toY: number;
+    distancePx: number;
 }
 
 interface PageCanvasStageProps {
@@ -176,6 +186,65 @@ function getEdgeResizedRect(
     };
 }
 
+interface PixelRect {
+    left: number;
+    top: number;
+    right: number;
+    bottom: number;
+}
+
+function toPixelRect(rect: BlockRect, safeArea: { x: number; y: number; w: number; h: number }): PixelRect {
+    const left = safeArea.x + rect.x * safeArea.w;
+    const top = safeArea.y + rect.y * safeArea.h;
+    return {
+        left,
+        top,
+        right: left + rect.w * safeArea.w,
+        bottom: top + rect.h * safeArea.h,
+    };
+}
+
+function getClosestAxisPoints(
+    aStart: number,
+    aEnd: number,
+    bStart: number,
+    bEnd: number,
+): { a: number; b: number } {
+    if (aEnd < bStart) {
+        return { a: aEnd, b: bStart };
+    }
+    if (bEnd < aStart) {
+        return { a: aStart, b: bEnd };
+    }
+
+    const overlapStart = Math.max(aStart, bStart);
+    const overlapEnd = Math.min(aEnd, bEnd);
+    const anchor = (overlapStart + overlapEnd) * 0.5;
+    return { a: anchor, b: anchor };
+}
+
+function getClosestRectConnection(
+    source: PixelRect,
+    target: PixelRect,
+): { fromX: number; fromY: number; toX: number; toY: number; distancePx: number } {
+    const x = getClosestAxisPoints(source.left, source.right, target.left, target.right);
+    const y = getClosestAxisPoints(source.top, source.bottom, target.top, target.bottom);
+    const dx = x.b - x.a;
+    const dy = y.b - y.a;
+
+    return {
+        fromX: x.a,
+        fromY: y.a,
+        toX: x.b,
+        toY: y.b,
+        distancePx: Math.hypot(dx, dy),
+    };
+}
+
+function formatDistanceLabel(distancePx: number): string {
+    return `${Math.max(0, Math.round(distancePx))}px`;
+}
+
 export function PageCanvasStage({
     layout,
     onLayoutChange,
@@ -192,9 +261,11 @@ export function PageCanvasStage({
     );
 
     const stageRef = useRef<HTMLDivElement>(null);
+    const clipboardRef = useRef<LayoutBlock[]>([]);
     const [dragging, setDragging] = useState<DragState | null>(null);
     const [resizing, setResizing] = useState<ResizeState | null>(null);
     const [cropping, setCropping] = useState<CropState | null>(null);
+    const [thinSnapEnabled, setThinSnapEnabled] = useState(true);
     const [cropPreview, setCropPreview] = useState<{
         blockId: string;
         crop: VisualCrop;
@@ -208,6 +279,16 @@ export function PageCanvasStage({
         x: null,
         y: null,
     });
+    const safeNudgeStep = useMemo(
+        () =>
+            clamp(
+                Number.isFinite(nudgeStep) ? nudgeStep : 0.01,
+                MIN_NUDGE_STEP,
+                MAX_NUDGE_STEP,
+            ),
+        [nudgeStep],
+    );
+    const snapThresholdPx = thinSnapEnabled ? THIN_SNAP_THRESHOLD_PX : SNAP_THRESHOLD_PX;
     const multiSelectedBounds = useMemo(() => {
         if (selectedBlockIds.length <= 1) {
             return null;
@@ -245,6 +326,69 @@ export function PageCanvasStage({
         }
         return safeArea.h / referenceSafeArea.h;
     }, [referenceSafeArea.h, safeArea.h]);
+    const primarySelectedBounds = useMemo(() => {
+        if (selectedBlockIds.length === 0) {
+            return null;
+        }
+        if (multiSelectedBounds) {
+            return multiSelectedBounds;
+        }
+
+        const primaryId = selectedBlockId && selectedBlockIds.includes(selectedBlockId)
+            ? selectedBlockId
+            : (selectedBlockIds[selectedBlockIds.length - 1] ?? null);
+        if (!primaryId) {
+            return null;
+        }
+
+        if (cropPreview && cropPreview.blockId === primaryId) {
+            return {
+                x: cropPreview.x,
+                y: cropPreview.y,
+                w: cropPreview.w,
+                h: cropPreview.h,
+            };
+        }
+
+        const selectedBlock = layout.blocks.find((block) => block.id === primaryId);
+        if (!selectedBlock) {
+            return null;
+        }
+        return {
+            x: selectedBlock.x,
+            y: selectedBlock.y,
+            w: selectedBlock.w,
+            h: selectedBlock.h,
+        };
+    }, [cropPreview, layout.blocks, multiSelectedBounds, selectedBlockId, selectedBlockIds]);
+    const distanceGuide = useMemo<DistanceGuideState | null>(() => {
+        if (!primarySelectedBounds) {
+            return null;
+        }
+
+        const activeIds = new Set(selectedBlockIds);
+        const sourceRect = toPixelRect(primarySelectedBounds, safeArea);
+        let nearest: DistanceGuideState | null = null;
+
+        for (const block of layout.blocks) {
+            if (activeIds.has(block.id)) {
+                continue;
+            }
+            const targetRect = toPixelRect(
+                { x: block.x, y: block.y, w: block.w, h: block.h },
+                safeArea,
+            );
+            const connection = getClosestRectConnection(sourceRect, targetRect);
+            if (!nearest || connection.distancePx < nearest.distancePx) {
+                nearest = {
+                    nearestBlockId: block.id,
+                    ...connection,
+                };
+            }
+        }
+
+        return nearest;
+    }, [layout.blocks, primarySelectedBounds, safeArea, selectedBlockIds]);
     const isTransforming = Boolean(dragging || resizing || cropping);
     const showInlinePreview = !finalRenderPreviewSrc || isTransforming;
 
@@ -433,6 +577,49 @@ export function PageCanvasStage({
         applySelection([]);
     }, [applySelection, onLayoutChange, selectedBlockIds]);
 
+    const copySelectedBlocks = useCallback(() => {
+        if (selectedBlockIds.length === 0) return;
+        const target = new Set(selectedBlockIds);
+        clipboardRef.current = layout.blocks.filter((b) => target.has(b.id));
+    }, [layout.blocks, selectedBlockIds]);
+
+    const pasteBlocks = useCallback(() => {
+        const source = clipboardRef.current;
+        if (source.length === 0) return;
+        if (!canAddBlock(layout)) return;
+
+        const maxZ = layout.blocks.reduce((z, b) => Math.max(z, b.zIndex), 0);
+        const OFFSET = 0.02;
+        const newBlocks: LayoutBlock[] = [];
+        const newIds: string[] = [];
+
+        for (let i = 0; i < source.length; i++) {
+            const block = source[i];
+            const id = crypto.randomUUID();
+            newIds.push(id);
+            newBlocks.push({
+                ...block,
+                id,
+                x: Math.min(block.x + OFFSET, 1 - block.w),
+                y: Math.min(block.y + OFFSET, 1 - block.h),
+                zIndex: maxZ + 1 + i,
+            } as LayoutBlock);
+        }
+
+        onLayoutChange((prev) => ({
+            ...prev,
+            blocks: [...prev.blocks, ...newBlocks],
+        }));
+        applySelection(newIds, newIds[0]);
+    }, [applySelection, layout, onLayoutChange]);
+
+    const duplicateSelectedBlocks = useCallback(() => {
+        if (selectedBlockIds.length === 0) return;
+        const target = new Set(selectedBlockIds);
+        clipboardRef.current = layout.blocks.filter((b) => target.has(b.id));
+        pasteBlocks();
+    }, [layout.blocks, pasteBlocks, selectedBlockIds]);
+
     const moveSelectedBlocks = useCallback(
         (deltaX: number, deltaY: number) => {
             if (selectedBlockIds.length === 0) {
@@ -494,26 +681,40 @@ export function PageCanvasStage({
                 return;
             }
 
-            const safeStep = clamp(
-                Number.isFinite(nudgeStep) ? nudgeStep : 0.01,
-                MIN_NUDGE_STEP,
-                MAX_NUDGE_STEP,
-            );
+            const isCtrl = event.ctrlKey || event.metaKey;
+
+            if (isCtrl && event.key === "c") {
+                event.preventDefault();
+                copySelectedBlocks();
+                return;
+            }
+
+            if (isCtrl && event.key === "v") {
+                event.preventDefault();
+                pasteBlocks();
+                return;
+            }
+
+            if (isCtrl && event.key === "d") {
+                event.preventDefault();
+                duplicateSelectedBlocks();
+                return;
+            }
 
             let deltaX = 0;
             let deltaY = 0;
             switch (event.key) {
                 case "ArrowUp":
-                    deltaY = -safeStep;
+                    deltaY = -safeNudgeStep;
                     break;
                 case "ArrowDown":
-                    deltaY = safeStep;
+                    deltaY = safeNudgeStep;
                     break;
                 case "ArrowLeft":
-                    deltaX = -safeStep;
+                    deltaX = -safeNudgeStep;
                     break;
                 case "ArrowRight":
-                    deltaX = safeStep;
+                    deltaX = safeNudgeStep;
                     break;
                 default:
                     return;
@@ -527,7 +728,7 @@ export function PageCanvasStage({
         return () => {
             window.removeEventListener("keydown", handleKeyDown);
         };
-    }, [deleteSelectedBlocks, moveSelectedBlocks, nudgeStep, selectedBlockIds.length]);
+    }, [copySelectedBlocks, deleteSelectedBlocks, duplicateSelectedBlocks, moveSelectedBlocks, pasteBlocks, safeNudgeStep, selectedBlockIds.length]);
 
     const handlePointerDown = useCallback(
         (e: React.PointerEvent, block: LayoutBlock) => {
@@ -679,13 +880,14 @@ export function PageCanvasStage({
                         w: block.w,
                         h: block.h,
                     }));
+                targetRects.push({ x: 0, y: 0, w: 1, h: 1 });
                 const snappedCrop = getSnappedCropForEdge(
                     source,
                     nextCrop,
                     cropping.drag.edge,
                     targetRects,
-                    SNAP_THRESHOLD_PX / Math.max(1, safeArea.w),
-                    SNAP_THRESHOLD_PX / Math.max(1, safeArea.h),
+                    snapThresholdPx / Math.max(1, safeArea.w),
+                    snapThresholdPx / Math.max(1, safeArea.h),
                     MIN_BLOCK_SIZE,
                 );
                 const previewBlock = buildVisualCropBlockForEdge(
@@ -740,13 +942,14 @@ export function PageCanvasStage({
                             w: block.w,
                             h: block.h,
                         }));
+                    targetRects.push({ x: 0, y: 0, w: 1, h: 1 });
                     const snapped = getSnappedDragDelta({
                         proposedDx,
                         proposedDy,
                         movingRects: originRects,
                         targetRects,
-                        thresholdX: SNAP_THRESHOLD_PX / Math.max(1, safeArea.w),
-                        thresholdY: SNAP_THRESHOLD_PX / Math.max(1, safeArea.h),
+                        thresholdX: snapThresholdPx / Math.max(1, safeArea.w),
+                        thresholdY: snapThresholdPx / Math.max(1, safeArea.h),
                     });
                     const appliedDx = clamp(snapped.dx, minDx, maxDx);
                     const appliedDy = clamp(snapped.dy, minDy, maxDy);
@@ -816,14 +1019,15 @@ export function PageCanvasStage({
                         w: block.w,
                         h: block.h,
                     }));
+                targetRects.push({ x: 0, y: 0, w: 1, h: 1 });
                 const snappedResize = getSnappedUniformResizeScale({
                     desiredScale: clamp(desiredScale, safeMinScale, maxScale),
                     minScale: safeMinScale,
                     maxScale,
                     bounds: resizing.bounds,
                     targetRects,
-                    thresholdX: SNAP_THRESHOLD_PX / Math.max(1, safeArea.w),
-                    thresholdY: SNAP_THRESHOLD_PX / Math.max(1, safeArea.h),
+                    thresholdX: snapThresholdPx / Math.max(1, safeArea.w),
+                    thresholdY: snapThresholdPx / Math.max(1, safeArea.h),
                 });
                 const uniformScale = snappedResize.scale;
                 setSnapGuide({
@@ -869,7 +1073,7 @@ export function PageCanvasStage({
                 }));
             }
         },
-        [cropping, dragging, layout.blocks, onLayoutChange, resizing, safeArea.h, safeArea.w],
+        [cropping, dragging, layout.blocks, onLayoutChange, resizing, safeArea.h, safeArea.w, snapThresholdPx],
     );
 
     const handlePointerUp = useCallback(() => {
@@ -1047,6 +1251,16 @@ export function PageCanvasStage({
                 <span className="text-[10px] text-neutral-500">
                     Shift + Click untuk multi-select
                 </span>
+                <button
+                    type="button"
+                    onClick={() => setThinSnapEnabled((prev) => !prev)}
+                    className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${thinSnapEnabled
+                        ? "border-sky-500/60 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20"
+                        : "border-neutral-700 bg-neutral-800 text-neutral-200 hover:bg-neutral-700"
+                        }`}
+                >
+                    Snap Tipis {thinSnapEnabled ? "On" : "Off"}
+                </button>
                 {selectedBlockIds.length > 1 && (
                     <span className="rounded border border-amber-700/50 bg-amber-900/20 px-2 py-1 text-[10px] font-medium text-amber-300">
                         {selectedBlockIds.length} blok dipilih
@@ -1113,9 +1327,52 @@ export function PageCanvasStage({
                         }}
                     />
                 )}
+                {distanceGuide && (
+                    <>
+                        <svg
+                            className="pointer-events-none absolute inset-0"
+                            style={{ zIndex: 9994 }}
+                            aria-hidden="true"
+                        >
+                            <line
+                                x1={distanceGuide.fromX}
+                                y1={distanceGuide.fromY}
+                                x2={distanceGuide.toX}
+                                y2={distanceGuide.toY}
+                                stroke="rgba(110, 231, 183, 0.95)"
+                                strokeWidth={1.5}
+                                strokeDasharray="4 3"
+                            />
+                            <circle
+                                cx={distanceGuide.fromX}
+                                cy={distanceGuide.fromY}
+                                r={2}
+                                fill="rgba(110, 231, 183, 0.95)"
+                            />
+                            <circle
+                                cx={distanceGuide.toX}
+                                cy={distanceGuide.toY}
+                                r={2}
+                                fill="rgba(110, 231, 183, 0.95)"
+                            />
+                        </svg>
+                        <div
+                            className="pointer-events-none absolute rounded border border-emerald-300/40 bg-neutral-950/85 px-1.5 py-0.5 text-[10px] text-emerald-200"
+                            style={{
+                                left: (distanceGuide.fromX + distanceGuide.toX) * 0.5,
+                                top: (distanceGuide.fromY + distanceGuide.toY) * 0.5 - 10,
+                                transform: "translate(-50%, -50%)",
+                                zIndex: 9997,
+                            }}
+                        >
+                            {formatDistanceLabel(distanceGuide.distancePx)}
+                        </div>
+                    </>
+                )}
 
                 {sortedBlocks.map((block) => {
                     const isSelected = selectedBlockIdSet.has(block.id);
+                    const isNearestTarget = distanceGuide?.nearestBlockId === block.id;
                     const isPrimarySelection = selectedBlockId === block.id;
                     const isVisual = isVisualBlock(block);
                     const canCrop = block.type === "text"
@@ -1137,23 +1394,29 @@ export function PageCanvasStage({
                     const effectiveCrop = previewForBlock
                         ? previewForBlock.crop
                         : (isVisual ? block.crop : undefined);
+                    const outlineWidth = block.outline ? block.outline.width * textPreviewScale : 0;
 
                     return (
                         <div
                             key={block.id}
-                            className={`absolute cursor-move transition-shadow ${
-                                isSelected
-                                    ? "ring-2 ring-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.3)]"
-                                    : block.linkUrl
-                                        ? "ring-1 ring-sky-400/70 hover:ring-sky-300"
-                                        : "hover:ring-1 hover:ring-neutral-400"
-                            }`}
+                            className={`absolute cursor-move transition-shadow ${isSelected
+                                ? "ring-2 ring-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.3)]"
+                                : isNearestTarget
+                                    ? "ring-1 ring-emerald-300/90 shadow-[0_0_10px_rgba(110,231,183,0.25)]"
+                                : block.linkUrl
+                                    ? "ring-1 ring-sky-400/70 hover:ring-sky-300"
+                                    : "hover:ring-1 hover:ring-neutral-400"
+                                }`}
                             style={{
                                 left,
                                 top,
                                 width,
                                 height,
                                 zIndex: block.zIndex,
+                                borderRadius: block.type === "image" && block.shape === "circle"
+                                    ? "50%"
+                                    : `${(block.cornerRadius ?? 0) * textPreviewScale}px`,
+                                outline: block.outline ? `${outlineWidth}px solid ${block.outline.color}` : undefined,
                             }}
                             onPointerDown={(e) => handlePointerDown(e, block)}
                             onClick={(e) => e.stopPropagation()}
@@ -1162,6 +1425,7 @@ export function PageCanvasStage({
                                 <div
                                     className="h-full w-full overflow-hidden"
                                     style={{
+                                        borderRadius: "inherit",
                                         fontSize: `${Math.max(
                                             8,
                                             block.style.fontSize * textPreviewScale,
@@ -1181,7 +1445,10 @@ export function PageCanvasStage({
                                     {block.content || "..."}
                                 </div>
                             ) : showInlinePreview && block.type === "image" ? (
-                                <div className="flex h-full w-full items-center justify-center overflow-hidden bg-neutral-200">
+                                <div
+                                    className="flex h-full w-full items-center justify-center overflow-hidden bg-neutral-200"
+                                    style={{ borderRadius: "inherit" }}
+                                >
                                     {block.assetPath ? (
                                         block.shape === "circle" ? (
                                             <div
@@ -1213,7 +1480,10 @@ export function PageCanvasStage({
                                     )}
                                 </div>
                             ) : showInlinePreview && block.type === "svg" ? (
-                                <div className="flex h-full w-full items-center justify-center">
+                                <div
+                                    className="flex h-full w-full items-center justify-center overflow-hidden"
+                                    style={{ borderRadius: "inherit" }}
+                                >
                                     {(() => {
                                         const sanitized = sanitizeSvgCode(block.svgCode);
                                         const svgUrl = sanitized ? svgToDataUrl(sanitized) : null;
@@ -1235,11 +1505,14 @@ export function PageCanvasStage({
                                     })()}
                                 </div>
                             ) : showInlinePreview ? (
-                                <div className="flex h-full w-full items-center justify-center bg-neutral-900/40">
+                                <div
+                                    className="flex h-full w-full items-center justify-center overflow-hidden bg-neutral-900/40"
+                                    style={{ borderRadius: "inherit" }}
+                                >
                                     <span className="text-xs text-neutral-400">Tipe blok lama</span>
                                 </div>
                             ) : (
-                                <div className="h-full w-full" />
+                                <div className="h-full w-full" style={{ borderRadius: "inherit" }} />
                             )}
 
                             {block.linkUrl && (

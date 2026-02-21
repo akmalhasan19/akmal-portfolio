@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
+import { getSupabaseErrorMessage } from "@/lib/supabase/errors";
 
 export default function AdminLoginPage() {
     const router = useRouter();
@@ -54,8 +55,10 @@ export default function AdminLoginPage() {
             }
 
             router.push("/admin");
-        } catch {
-            setError("Terjadi kesalahan. Coba lagi.");
+        } catch (error) {
+            setError(
+                getSupabaseErrorMessage(error, "Terjadi kesalahan. Coba lagi."),
+            );
             setLoading(false);
         }
     };

@@ -53,6 +53,19 @@ export interface LinkStyleConfig {
     fontWeight: number;
 }
 
+// ── Outline ──────────────────────────────────
+
+export interface BlockOutline {
+    /** CSS color string for the outline stroke. */
+    color: string;
+    /**
+     * Stroke width in canvas pixels at the base canvas height (1536 px).
+     * Automatically scaled proportionally on larger/smaller canvases.
+     * Valid range: 1–100.
+     */
+    width: number;
+}
+
 // ── Blocks ───────────────────────────────────
 
 interface BlockBase {
@@ -72,6 +85,15 @@ interface BlockBase {
     zIndex: number;
     /** Optional URL opened when this block is clicked in 3D view. */
     linkUrl?: string;
+    /** Optional stroke outline drawn around the block boundary. */
+    outline?: BlockOutline;
+    /**
+     * Corner radius in canvas pixels at the base canvas height (1536 px).
+     * Automatically scaled. 0 = sharp corners. Valid range: 0–500.
+     * Applies to clip shape for text/image/svg blocks.
+     * For link blocks, use style.borderRadius instead.
+     */
+    cornerRadius?: number;
 }
 
 export interface TextBlock extends BlockBase {
@@ -108,6 +130,16 @@ export interface SvgBlock extends BlockBase {
     crop?: VisualCrop;
 }
 
+export interface ShapeBlock extends BlockBase {
+    type: "shape";
+    shapeType: "rectangle" | "circle" | "triangle" | "diamond" | "pill";
+    fillColor: string;
+    strokeColor: string;
+    strokeWidth: number;
+    content: string;
+    style: TextStyleConfig;
+}
+
 export interface VisualCrop {
     /** Cropped ratio from the left side of source media. */
     left: number;
@@ -129,7 +161,7 @@ export interface LinkBlock extends BlockBase {
 }
 
 /** Discriminated union of all block types. */
-export type LayoutBlock = TextBlock | ImageBlock | SvgBlock | LinkBlock;
+export type LayoutBlock = TextBlock | ImageBlock | SvgBlock | LinkBlock | ShapeBlock;
 
 export interface LinkHitRegion {
     /** Normalized x position in full page texture coordinates (0..1). */

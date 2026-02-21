@@ -1,7 +1,9 @@
 import type {
     ImageBlock,
+    LayoutBlock,
     LinkBlock,
     PageSideLayout,
+    ShapeBlock,
     SvgBlock,
     TextBlock,
 } from "@/types/book-content";
@@ -13,12 +15,13 @@ import { getVisualCropSourceRect } from "./visual-crop";
 
 // ── Constants ────────────────────────────────
 
-export const CANVAS_RENDERER_VERSION = "11";
+export const CANVAS_RENDERER_VERSION = "14";
 export const BASE_CANVAS_HEIGHT = 1536;
 const DEFAULT_BG_COLOR = normalizePaperBackground();
 const MAX_IMAGE_CACHE_ENTRIES = 96;
 const SVG_RASTER_BASE_WIDTH = 1024;
 const resolvedFontFamilyCache = new Map<string, string>();
+const loadedCanvasFontDescriptors = new Set<string>();
 
 type RenderLanguageCode = "id" | "en";
 
@@ -301,10 +304,11 @@ function drawTextLines(
     height: number,
     linePixelHeight: number,
 ) {
+    const maxDrawY = y + height + linePixelHeight * 0.35;
     for (let i = 0; i < lines.length; i += 1) {
         const line = lines[i];
         const lineY = y + i * linePixelHeight;
-        if (lineY > y + height) break;
+        if (lineY > maxDrawY) break;
         drawAlignedTextLine(ctx, line, textAlign, x, lineY, width);
     }
 }
@@ -329,8 +333,13 @@ function drawTextBlock(
     const resolvedFontFamily = resolveCanvasFontFamily(fontFamily);
 
     ctx.save();
+    const cornerRadiusPx = (block.cornerRadius ?? 0) * fontScale;
     ctx.beginPath();
-    ctx.rect(x, y, w, h);
+    if (cornerRadiusPx > 0) {
+        drawRoundedRectPath(ctx, x, y, w, h, cornerRadiusPx);
+    } else {
+        ctx.rect(x, y, w, h);
+    }
     ctx.clip();
 
     const effectiveFontSize = Math.max(1, fontSize * fontScale);
@@ -339,18 +348,26 @@ function drawTextBlock(
     ctx.textBaseline = "top";
 
     const linePixelHeight = effectiveFontSize * lineHeight;
+    // CSS line-height distributes extra leading equally above and below each
+    // line (half-leading).  Canvas textBaseline="top" starts glyphs flush at
+    // the given y, so without an offset the first line sits higher than CSS
+    // and the last line's descenders can extend past the block boundary,
+    // causing visible clipping.  Adding the half-leading offset here aligns
+    // the canvas output with the admin panel's CSS rendering.
+    const halfLeading = effectiveFontSize * (lineHeight - 1) * 0.5;
     const textContent = resolveTextContentByLanguage(block, language);
     const listType = block.style.listType ?? "none";
+    const maxDrawY = y + h + linePixelHeight * 0.35;
     if (listType !== "none") {
         const paragraphs = textContent.split("\n");
         const markerGapWidth = Math.max(
             LIST_MARKER_FALLBACK_GAP_PX,
             ctx.measureText(" ").width,
         );
-        let currentY = y;
+        let currentY = y + halfLeading;
 
         for (const paragraph of paragraphs) {
-            if (currentY > y + h) {
+            if (currentY > maxDrawY) {
                 break;
             }
 
@@ -363,7 +380,7 @@ function drawTextBlock(
             if (!parsedListLine) {
                 const wrapped = wrapTextDetailed(ctx, paragraph, w);
                 for (const wrappedLine of wrapped) {
-                    if (currentY > y + h) {
+                    if (currentY > maxDrawY) {
                         break;
                     }
                     drawAlignedTextLine(ctx, wrappedLine, "left", x, currentY, w);
@@ -377,7 +394,7 @@ function drawTextBlock(
             const contentWidth = Math.max(1, w - hangingIndentWidth);
             const wrappedContent = wrapTextDetailed(ctx, parsedListLine.content, contentWidth);
 
-            if (currentY <= y + h) {
+            if (currentY <= maxDrawY) {
                 ctx.textAlign = "left";
                 ctx.fillText(parsedListLine.marker, x, currentY);
             }
@@ -388,7 +405,7 @@ function drawTextBlock(
             }
 
             for (const wrappedLine of wrappedContent) {
-                if (currentY > y + h) {
+                if (currentY > maxDrawY) {
                     break;
                 }
                 drawAlignedTextLine(
@@ -404,8 +421,142 @@ function drawTextBlock(
         }
     } else {
         const wrappedLines = wrapTextDetailed(ctx, textContent, w);
-        drawTextLines(ctx, wrappedLines, textAlign, x, y, w, h, linePixelHeight);
+        drawTextLines(ctx, wrappedLines, textAlign, x, y + halfLeading, w, h, linePixelHeight);
     }
+    ctx.restore();
+}
+
+function drawShapePath(
+    ctx: CanvasRenderingContext2D,
+    shapeType: ShapeBlock["shapeType"],
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    cornerRadiusPx: number,
+) {
+    ctx.beginPath();
+
+    if (shapeType === "circle") {
+        ctx.ellipse(
+            x + w * 0.5,
+            y + h * 0.5,
+            Math.max(0, w * 0.5),
+            Math.max(0, h * 0.5),
+            0,
+            0,
+            Math.PI * 2,
+        );
+        ctx.closePath();
+        return;
+    }
+
+    if (shapeType === "triangle") {
+        ctx.moveTo(x + w * 0.5, y);
+        ctx.lineTo(x + w, y + h);
+        ctx.lineTo(x, y + h);
+        ctx.closePath();
+        return;
+    }
+
+    if (shapeType === "diamond") {
+        ctx.moveTo(x + w * 0.5, y);
+        ctx.lineTo(x + w, y + h * 0.5);
+        ctx.lineTo(x + w * 0.5, y + h);
+        ctx.lineTo(x, y + h * 0.5);
+        ctx.closePath();
+        return;
+    }
+
+    if (shapeType === "pill") {
+        drawRoundedRectPath(ctx, x, y, w, h, h * 0.5);
+        return;
+    }
+
+    if (cornerRadiusPx > 0) {
+        drawRoundedRectPath(ctx, x, y, w, h, cornerRadiusPx);
+        return;
+    }
+
+    ctx.rect(x, y, w, h);
+    ctx.closePath();
+}
+
+function drawShapeBlock(
+    ctx: CanvasRenderingContext2D,
+    block: ShapeBlock,
+    safeX: number,
+    safeY: number,
+    safeW: number,
+    safeH: number,
+    fontScale: number,
+) {
+    const x = safeX + block.x * safeW;
+    const y = safeY + block.y * safeH;
+    const w = block.w * safeW;
+    const h = block.h * safeH;
+    const cornerRadiusPx = (block.cornerRadius ?? 0) * fontScale;
+
+    if (w <= 0 || h <= 0) {
+        return;
+    }
+
+    const fillColor = block.fillColor || "transparent";
+    const strokeColor = block.strokeColor || "transparent";
+    const strokeWidth = Math.max(0, block.strokeWidth * fontScale);
+    const hasFill = fillColor !== "transparent";
+    const hasStroke = strokeWidth > 0 && strokeColor !== "transparent";
+
+    ctx.save();
+    drawShapePath(ctx, block.shapeType, x, y, w, h, cornerRadiusPx);
+    if (hasFill) {
+        ctx.fillStyle = fillColor;
+        ctx.fill();
+    }
+    if (hasStroke) {
+        ctx.strokeStyle = strokeColor;
+        ctx.lineWidth = strokeWidth;
+        ctx.lineJoin = "round";
+        ctx.lineCap = "round";
+        ctx.stroke();
+    }
+
+    const text = block.content ?? "";
+    if (text.trim().length > 0) {
+        const resolvedFontFamily = resolveCanvasFontFamily(block.style.fontFamily);
+        const effectiveFontSize = Math.max(1, block.style.fontSize * fontScale);
+        const linePixelHeight = effectiveFontSize * block.style.lineHeight;
+        const halfLeading = effectiveFontSize * (block.style.lineHeight - 1) * 0.5;
+        const textPaddingX = Math.max(2, effectiveFontSize * 0.2);
+        const textPaddingY = Math.max(2, effectiveFontSize * 0.18);
+        const textX = x + textPaddingX;
+        const textW = Math.max(1, w - textPaddingX * 2);
+        const textH = Math.max(1, h - textPaddingY * 2);
+
+        drawShapePath(ctx, block.shapeType, x, y, w, h, cornerRadiusPx);
+        ctx.clip();
+        ctx.font = `${block.style.fontWeight} ${effectiveFontSize}px ${resolvedFontFamily}`;
+        ctx.fillStyle = block.style.color;
+        ctx.textBaseline = "top";
+        const wrapped = wrapTextDetailed(ctx, text, textW);
+
+        // Center text vertically within the shape
+        const totalTextHeight = wrapped.length * linePixelHeight;
+        const verticalOffset = Math.max(0, (textH - totalTextHeight) / 2);
+        const textY = y + textPaddingY + halfLeading + verticalOffset;
+
+        drawTextLines(
+            ctx,
+            wrapped,
+            block.style.textAlign,
+            textX,
+            textY,
+            textW,
+            textH,
+            linePixelHeight,
+        );
+    }
+
     ctx.restore();
 }
 
@@ -588,6 +739,97 @@ function resolveCanvasFontFamily(input: string): string {
     return normalized;
 }
 
+function buildCanvasFontDescriptor(
+    fontWeight: string | number,
+    fontSize: number,
+    fontFamily: string,
+): string {
+    const safeSize = Math.max(1, Number.isFinite(fontSize) ? fontSize : 12);
+    const roundedSize = Math.round(safeSize * 100) / 100;
+    return `${fontWeight} ${roundedSize}px ${fontFamily}`;
+}
+
+async function ensureLayoutFontsReady(
+    layout: PageSideLayout,
+    fontScale: number,
+): Promise<void> {
+    if (typeof document === "undefined" || !("fonts" in document)) {
+        return;
+    }
+
+    const fontFaceSet = document.fonts;
+    const descriptors = new Set<string>();
+
+    for (const block of layout.blocks) {
+        if (block.type === "text") {
+            const resolvedFamily = resolveCanvasFontFamily(block.style.fontFamily);
+            const descriptor = buildCanvasFontDescriptor(
+                block.style.fontWeight,
+                block.style.fontSize * fontScale,
+                resolvedFamily,
+            );
+            descriptors.add(descriptor);
+            continue;
+        }
+
+        if (block.type === "link") {
+            const resolvedFamily = resolveCanvasFontFamily(block.style.fontFamily);
+            const descriptor = buildCanvasFontDescriptor(
+                block.style.fontWeight,
+                block.style.fontSize * fontScale,
+                resolvedFamily,
+            );
+            descriptors.add(descriptor);
+            continue;
+        }
+
+        if (block.type === "shape") {
+            const resolvedFamily = resolveCanvasFontFamily(block.style.fontFamily);
+            const descriptor = buildCanvasFontDescriptor(
+                block.style.fontWeight,
+                block.style.fontSize * fontScale,
+                resolvedFamily,
+            );
+            descriptors.add(descriptor);
+        }
+    }
+
+    if (descriptors.size === 0) {
+        return;
+    }
+
+    const loadTasks: Promise<unknown>[] = [];
+    for (const descriptor of descriptors) {
+        if (loadedCanvasFontDescriptors.has(descriptor)) {
+            continue;
+        }
+
+        try {
+            if (fontFaceSet.check(descriptor)) {
+                loadedCanvasFontDescriptors.add(descriptor);
+                continue;
+            }
+        } catch {
+            // Fall through to load attempt.
+        }
+
+        loadTasks.push(
+            fontFaceSet
+                .load(descriptor)
+                .then(() => {
+                    loadedCanvasFontDescriptors.add(descriptor);
+                })
+                .catch(() => {
+                    // Keep rendering even if font load fails.
+                }),
+        );
+    }
+
+    if (loadTasks.length > 0) {
+        await Promise.allSettled(loadTasks);
+    }
+}
+
 function drawVisualBlock(
     ctx: CanvasRenderingContext2D,
     block: ImageBlock | SvgBlock,
@@ -596,6 +838,7 @@ function drawVisualBlock(
     safeY: number,
     safeW: number,
     safeH: number,
+    scale: number,
 ) {
     const x = safeX + block.x * safeW;
     const y = safeY + block.y * safeH;
@@ -619,11 +862,16 @@ function drawVisualBlock(
     }
 
     ctx.save();
+    const cornerRadiusPx = (block.cornerRadius ?? 0) * scale;
     if (isCircleImage) {
         const radius = drawBoxSize * 0.5;
         ctx.beginPath();
         ctx.arc(drawX + drawW * 0.5, drawY + drawH * 0.5, radius, 0, Math.PI * 2);
         ctx.closePath();
+        ctx.clip();
+    } else if (cornerRadiusPx > 0) {
+        ctx.beginPath();
+        drawRoundedRectPath(ctx, drawX, drawY, drawW, drawH, cornerRadiusPx);
         ctx.clip();
     } else {
         ctx.beginPath();
@@ -746,6 +994,78 @@ function drawLinkBlock(
     ctx.restore();
 }
 
+function drawBlockOutline(
+    ctx: CanvasRenderingContext2D,
+    block: LayoutBlock,
+    safeX: number,
+    safeY: number,
+    safeW: number,
+    safeH: number,
+    scale: number,
+) {
+    const outline = block.outline;
+    if (!outline) {
+        return;
+    }
+
+    const rawWidth = outline.width * scale;
+    if (rawWidth <= 0) {
+        return;
+    }
+
+    const x = safeX + block.x * safeW;
+    const y = safeY + block.y * safeH;
+    const w = block.w * safeW;
+    const h = block.h * safeH;
+    const isCircleImage = block.type === "image" && block.shape === "circle";
+
+    ctx.save();
+    ctx.strokeStyle = outline.color;
+    ctx.lineWidth = rawWidth;
+    // Stroke is centered on the path. Expand outward by half line width so the
+    // outline grows outside the block boundary without clipping its content.
+    const half = rawWidth / 2;
+
+    if (isCircleImage) {
+        const drawBoxSize = Math.min(w, h);
+        const cx = x + w / 2;
+        const cy = y + h / 2;
+        const radius = drawBoxSize / 2 + half;
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+        ctx.stroke();
+    } else if (block.type === "link") {
+        // For link blocks use their style borderRadius (scaled outward).
+        const linkRadius = block.style.borderRadius * scale;
+        drawRoundedRectPath(
+            ctx,
+            x - half,
+            y - half,
+            w + rawWidth,
+            h + rawWidth,
+            linkRadius + half,
+        );
+        ctx.stroke();
+    } else {
+        const cornerPx = (block.cornerRadius ?? 0) * scale;
+        if (cornerPx > 0) {
+            drawRoundedRectPath(
+                ctx,
+                x - half,
+                y - half,
+                w + rawWidth,
+                h + rawWidth,
+                cornerPx + half,
+            );
+            ctx.stroke();
+        } else {
+            ctx.strokeRect(x - half, y - half, w + rawWidth, h + rawWidth);
+        }
+    }
+
+    ctx.restore();
+}
+
 // ── Main render function ─────────────────────
 
 /**
@@ -790,6 +1110,7 @@ export async function renderPageSideToCanvas(
 
     // 3. Sort blocks by z-index
     const sortedBlocks = [...layout.blocks].sort((a, b) => a.zIndex - b.zIndex);
+    await ensureLayoutFontsReady(layout, scaleY);
 
     // 4. Pre-load all images
     const imageBlocks = sortedBlocks.filter(
@@ -842,16 +1163,21 @@ export async function renderPageSideToCanvas(
             } else if (block.type === "image") {
                 const img = loadedImages.get(block.id);
                 if (img) {
-                    drawVisualBlock(ctx, block, img, safe.x, safe.y, safe.w, safe.h);
+                    drawVisualBlock(ctx, block, img, safe.x, safe.y, safe.w, safe.h, scaleY);
                 }
             } else if (block.type === "svg") {
                 const img = loadedImages.get(block.id);
                 if (img) {
-                    drawVisualBlock(ctx, block, img, safe.x, safe.y, safe.w, safe.h);
+                    drawVisualBlock(ctx, block, img, safe.x, safe.y, safe.w, safe.h, scaleY);
                 }
             } else if (block.type === "link") {
                 drawLinkBlock(ctx, block, safe.x, safe.y, safe.w, safe.h, scaleY);
+            } else if (block.type === "shape") {
+                drawShapeBlock(ctx, block, safe.x, safe.y, safe.w, safe.h, scaleY);
             }
+
+            // Draw outline on top of block content (if configured)
+            drawBlockOutline(ctx, block, safe.x, safe.y, safe.w, safe.h, scaleY);
         } catch {
             if (process.env.NODE_ENV !== "production") {
                 console.warn("[render-canvas] Failed to draw block", block.id);

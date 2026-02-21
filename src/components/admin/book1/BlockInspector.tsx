@@ -10,6 +10,7 @@ import {
 import type {
     LayoutBlock,
     PageSideLayout,
+    ShapeBlock,
     TextBlock,
 } from "@/types/book-content";
 import { ImageUploadField } from "./ImageUploadField";
@@ -209,6 +210,31 @@ export function BlockInspector({
             blocks: prev.blocks.map((b) =>
                 b.id === blockId && b.type === "text"
                     ? { ...b, style: { ...b.style, ...styleUpdates } }
+                    : b,
+            ),
+        }));
+    };
+
+    const updateShapeStyle = (
+        blockId: string,
+        styleUpdates: Partial<ShapeBlock["style"]>,
+    ) => {
+        onLayoutChange((prev) => ({
+            ...prev,
+            blocks: prev.blocks.map((b) =>
+                b.id === blockId && b.type === "shape"
+                    ? { ...b, style: { ...b.style, ...styleUpdates } }
+                    : b,
+            ),
+        }));
+    };
+
+    const updateShapeContent = (blockId: string, content: string) => {
+        onLayoutChange((prev) => ({
+            ...prev,
+            blocks: prev.blocks.map((b) =>
+                b.id === blockId && b.type === "shape"
+                    ? { ...b, content }
                     : b,
             ),
         }));
@@ -659,7 +685,9 @@ export function BlockInspector({
                         ? "Blok Gambar"
                         : selectedBlock.type === "svg"
                             ? "Blok SVG"
-                            : "Blok Lainnya"}
+                            : selectedBlock.type === "shape"
+                                ? "Blok Shape"
+                                : "Blok Lainnya"}
             </h3>
 
             {/* Position / Size */}
@@ -810,6 +838,135 @@ export function BlockInspector({
                     }
                     className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs outline-none focus:border-amber-500"
                 />
+            </div>
+
+            {/* ── Corner Radius ── */}
+            {selectedBlock.type !== "link" && (
+                <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                        <label className="text-xs text-neutral-500">Corner Radius</label>
+                        <span className="text-[10px] text-neutral-600">
+                            {(selectedBlock.cornerRadius ?? 0) === 0
+                                ? "Tajam"
+                                : `${selectedBlock.cornerRadius} px`}
+                        </span>
+                    </div>
+                    <input
+                        type="range"
+                        min="0"
+                        max="500"
+                        step="1"
+                        value={selectedBlock.cornerRadius ?? 0}
+                        onChange={(e) =>
+                            updateBlock(selectedBlock.id, {
+                                cornerRadius: parseInt(e.target.value),
+                            })
+                        }
+                        className="w-full accent-amber-500"
+                    />
+                    <input
+                        type="number"
+                        min="0"
+                        max="500"
+                        value={selectedBlock.cornerRadius ?? 0}
+                        onChange={(e) => {
+                            const parsed = parseInt(e.target.value);
+                            updateBlock(selectedBlock.id, {
+                                cornerRadius: Number.isFinite(parsed)
+                                    ? Math.min(500, Math.max(0, parsed))
+                                    : 0,
+                            });
+                        }}
+                        className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs outline-none focus:border-amber-500"
+                    />
+                </div>
+            )}
+
+            {/* ── Outline ── */}
+            <div className="space-y-2 rounded border border-neutral-800 bg-neutral-900/50 p-2.5">
+                <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-medium text-neutral-400">Outline</h4>
+                    <button
+                        type="button"
+                        onClick={() => {
+                            if (selectedBlock.outline) {
+                                updateBlock(selectedBlock.id, { outline: undefined });
+                            } else {
+                                updateBlock(selectedBlock.id, {
+                                    outline: { color: "#000000", width: 4 },
+                                });
+                            }
+                        }}
+                        className={[
+                            "rounded px-2 py-0.5 text-[10px] font-medium transition-colors",
+                            selectedBlock.outline
+                                ? "bg-amber-600/20 text-amber-400 border border-amber-600/40 hover:bg-amber-600/30"
+                                : "bg-neutral-800 text-neutral-400 border border-neutral-700 hover:bg-neutral-700",
+                        ].join(" ")}
+                    >
+                        {selectedBlock.outline ? "Aktif" : "Nonaktif"}
+                    </button>
+                </div>
+
+                {selectedBlock.outline && (
+                    <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-0.5">
+                            <label className="text-[10px] uppercase text-neutral-600">
+                                Warna
+                            </label>
+                            <div className="flex items-center gap-1.5">
+                                <input
+                                    type="color"
+                                    value={selectedBlock.outline.color}
+                                    onChange={(e) =>
+                                        updateBlock(selectedBlock.id, {
+                                            outline: {
+                                                ...selectedBlock.outline!,
+                                                color: e.target.value,
+                                            },
+                                        })
+                                    }
+                                    className="h-7 w-7 cursor-pointer rounded border border-neutral-700 bg-transparent"
+                                />
+                                <input
+                                    type="text"
+                                    value={selectedBlock.outline.color}
+                                    onChange={(e) =>
+                                        updateBlock(selectedBlock.id, {
+                                            outline: {
+                                                ...selectedBlock.outline!,
+                                                color: e.target.value,
+                                            },
+                                        })
+                                    }
+                                    className="flex-1 min-w-0 rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs outline-none focus:border-amber-500"
+                                />
+                            </div>
+                        </div>
+                        <div className="space-y-0.5">
+                            <label className="text-[10px] uppercase text-neutral-600">
+                                Ketebalan (px)
+                            </label>
+                            <input
+                                type="number"
+                                min="1"
+                                max="100"
+                                value={selectedBlock.outline.width}
+                                onChange={(e) => {
+                                    const parsed = parseInt(e.target.value);
+                                    if (!Number.isFinite(parsed)) return;
+                                    updateBlock(selectedBlock.id, {
+                                        outline: {
+                                            ...selectedBlock.outline!,
+                                            width: Math.min(100, Math.max(1, parsed)),
+                                        },
+                                    });
+                                }}
+                                className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs outline-none focus:border-amber-500"
+                            />
+                        </div>
+                    </div>
+                )}
             </div>
 
             {/* ── Text-specific controls ────────── */}
@@ -1127,9 +1284,260 @@ export function BlockInspector({
                 </>
             )}
 
+            {/* ── Shape-specific controls ───────── */}
+            {selectedBlock.type === "shape" && (
+                <>
+                    {/* Shape Type */}
+                    <div className="space-y-0.5">
+                        <label className="text-[10px] uppercase text-neutral-600">
+                            Bentuk
+                        </label>
+                        <select
+                            value={selectedBlock.shapeType}
+                            onChange={(e) =>
+                                updateBlock(selectedBlock.id, {
+                                    shapeType: e.target.value as ShapeBlock["shapeType"],
+                                })
+                            }
+                            className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs outline-none focus:border-amber-500"
+                        >
+                            <option value="rectangle">Rectangle</option>
+                            <option value="circle">Circle</option>
+                            <option value="triangle">Triangle</option>
+                            <option value="diamond">Diamond</option>
+                            <option value="pill">Pill</option>
+                        </select>
+                    </div>
+
+                    {/* Fill & Stroke */}
+                    <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-0.5">
+                            <label className="text-[10px] uppercase text-neutral-600">
+                                Fill Color
+                            </label>
+                            <div className="flex items-center gap-1.5">
+                                <input
+                                    type="color"
+                                    value={selectedBlock.fillColor || "#ffffff"}
+                                    onChange={(e) =>
+                                        updateBlock(selectedBlock.id, {
+                                            fillColor: e.target.value,
+                                        })
+                                    }
+                                    className="h-7 w-7 cursor-pointer rounded border border-neutral-700 bg-transparent"
+                                />
+                                <input
+                                    type="text"
+                                    value={selectedBlock.fillColor}
+                                    onChange={(e) =>
+                                        updateBlock(selectedBlock.id, {
+                                            fillColor: e.target.value,
+                                        })
+                                    }
+                                    className="flex-1 min-w-0 rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs outline-none focus:border-amber-500"
+                                />
+                            </div>
+                        </div>
+                        <div className="space-y-0.5">
+                            <label className="text-[10px] uppercase text-neutral-600">
+                                Stroke Color
+                            </label>
+                            <div className="flex items-center gap-1.5">
+                                <input
+                                    type="color"
+                                    value={selectedBlock.strokeColor || "#000000"}
+                                    onChange={(e) =>
+                                        updateBlock(selectedBlock.id, {
+                                            strokeColor: e.target.value,
+                                        })
+                                    }
+                                    className="h-7 w-7 cursor-pointer rounded border border-neutral-700 bg-transparent"
+                                />
+                                <input
+                                    type="text"
+                                    value={selectedBlock.strokeColor}
+                                    onChange={(e) =>
+                                        updateBlock(selectedBlock.id, {
+                                            strokeColor: e.target.value,
+                                        })
+                                    }
+                                    className="flex-1 min-w-0 rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs outline-none focus:border-amber-500"
+                                />
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="space-y-0.5">
+                        <label className="text-[10px] uppercase text-neutral-600">
+                            Stroke Width
+                        </label>
+                        <input
+                            type="number"
+                            min="0"
+                            max="50"
+                            step="0.5"
+                            value={selectedBlock.strokeWidth}
+                            onChange={(e) =>
+                                updateBlock(selectedBlock.id, {
+                                    strokeWidth: parseFloat(e.target.value) || 0,
+                                })
+                            }
+                            className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs outline-none focus:border-amber-500"
+                        />
+                    </div>
+
+                    {/* Text Content */}
+                    <div className="space-y-1">
+                        <label className="text-xs text-neutral-500">Konten Teks</label>
+                        <textarea
+                            value={selectedBlock.content}
+                            onChange={(e) =>
+                                updateShapeContent(selectedBlock.id, e.target.value)
+                            }
+                            rows={3}
+                            className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1.5 text-xs outline-none focus:border-amber-500 resize-y"
+                            placeholder="Ketik teks di dalam shape..."
+                        />
+                    </div>
+
+                    {/* Text Style */}
+                    <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-0.5">
+                            <label className="text-[10px] uppercase text-neutral-600">
+                                Font Size
+                            </label>
+                            <input
+                                type="number"
+                                min="8"
+                                max="200"
+                                value={selectedBlock.style.fontSize}
+                                onChange={(e) =>
+                                    updateShapeStyle(selectedBlock.id, {
+                                        fontSize: parseInt(e.target.value) || 24,
+                                    })
+                                }
+                                className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs outline-none focus:border-amber-500"
+                            />
+                        </div>
+                        <div className="space-y-0.5">
+                            <label className="text-[10px] uppercase text-neutral-600">
+                                Weight
+                            </label>
+                            <select
+                                value={selectedBlock.style.fontWeight}
+                                onChange={(e) =>
+                                    updateShapeStyle(selectedBlock.id, {
+                                        fontWeight: parseInt(e.target.value),
+                                    })
+                                }
+                                className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs outline-none focus:border-amber-500"
+                            >
+                                {[100, 200, 300, 400, 500, 600, 700, 800, 900].map((w) => (
+                                    <option key={w} value={w}>
+                                        {w}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-0.5">
+                            <label className="text-[10px] uppercase text-neutral-600">
+                                Align
+                            </label>
+                            <select
+                                value={selectedBlock.style.textAlign}
+                                onChange={(e) =>
+                                    updateShapeStyle(selectedBlock.id, {
+                                        textAlign: e.target.value as "left" | "center" | "right" | "justify",
+                                    })
+                                }
+                                className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs outline-none focus:border-amber-500"
+                            >
+                                <option value="left">Left</option>
+                                <option value="center">Center</option>
+                                <option value="right">Right</option>
+                                <option value="justify">Rata kanan-kiri</option>
+                            </select>
+                        </div>
+                        <div className="space-y-0.5">
+                            <label className="text-[10px] uppercase text-neutral-600">
+                                Line Height
+                            </label>
+                            <input
+                                type="number"
+                                step="0.1"
+                                min="0.8"
+                                max="3"
+                                value={selectedBlock.style.lineHeight}
+                                onChange={(e) =>
+                                    updateShapeStyle(selectedBlock.id, {
+                                        lineHeight: parseFloat(e.target.value) || 1.4,
+                                    })
+                                }
+                                className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs outline-none focus:border-amber-500"
+                            />
+                        </div>
+                    </div>
+
+                    <div className="space-y-0.5">
+                        <label className="text-[10px] uppercase text-neutral-600">
+                            Text Color
+                        </label>
+                        <div className="flex items-center gap-2">
+                            <input
+                                type="color"
+                                value={selectedBlock.style.color}
+                                onChange={(e) =>
+                                    updateShapeStyle(selectedBlock.id, { color: e.target.value })
+                                }
+                                className="h-7 w-7 cursor-pointer rounded border border-neutral-700 bg-transparent"
+                            />
+                            <input
+                                type="text"
+                                value={selectedBlock.style.color}
+                                onChange={(e) =>
+                                    updateShapeStyle(selectedBlock.id, { color: e.target.value })
+                                }
+                                className="flex-1 rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs outline-none focus:border-amber-500"
+                            />
+                        </div>
+                    </div>
+
+                    <div className="space-y-0.5">
+                        <label className="text-[10px] uppercase text-neutral-600">
+                            Font Family
+                        </label>
+                        <select
+                            value={selectedBlock.style.fontFamily}
+                            onChange={(e) =>
+                                updateShapeStyle(selectedBlock.id, {
+                                    fontFamily: e.target.value,
+                                })
+                            }
+                            className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs outline-none focus:border-amber-500"
+                        >
+                            <optgroup label="System">
+                                <option value="sans-serif">Sans Serif</option>
+                                <option value="serif">Serif</option>
+                                <option value="monospace">Monospace</option>
+                            </optgroup>
+                            <optgroup label="Project Fonts">
+                                <option value="var(--font-geist-sans)">Geist Sans</option>
+                                <option value="var(--font-geist-mono)">Geist Mono</option>
+                                <option value="var(--font-crimson-text)">Crimson Text (Serif)</option>
+                                <option value="var(--font-caveat)">Caveat (Handwriting)</option>
+                            </optgroup>
+                        </select>
+                    </div>
+                </>
+            )}
+
             {selectedBlock.type !== "text"
                 && selectedBlock.type !== "image"
-                && selectedBlock.type !== "svg" && (
+                && selectedBlock.type !== "svg"
+                && selectedBlock.type !== "shape" && (
                     <p className="text-xs text-neutral-500">
                         Properti khusus untuk tipe blok ini belum tersedia di editor Book 1.
                     </p>
