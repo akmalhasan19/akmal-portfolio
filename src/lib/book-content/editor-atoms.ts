@@ -3,6 +3,7 @@
 import { atom } from "jotai";
 import type { PageSide, PageSideLayout } from "@/types/book-content";
 import { BOOK_PAPER_TONE } from "@/lib/book-content/paper-tone";
+import type { LanguageCode } from "@/lib/i18n/language";
 
 // ── Selected page / side ─────────────────────
 
@@ -33,6 +34,7 @@ export const loadingAtom = atom(false);
 export const selectedBlockIdAtom = atom<string | null>(null);
 export const selectedBlockIdsAtom = atom<string[]>([]);
 export const nudgeStepAtom = atom(0.01);
+export const contentLanguageAtom = atom<LanguageCode>("id");
 
 // ── Total page count for Book 1 ──────────────
 // This should match the number of interior pages in Book3D.

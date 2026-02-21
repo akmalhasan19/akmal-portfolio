@@ -781,6 +781,10 @@ const Page = ({
       ? Math.max(0, page - number)
       : Math.max(0, number - page);
 
+  const rawTargetPage = opened ? number : number + 1;
+  const targetPage = rawTargetPage;
+  const canFlipOnClick = targetPage >= minPage && targetPage <= maxPage;
+
   const relativeSheetZ = (zOffset ?? 0) - (anchorZOffset ?? 0);
 
   // Prevent stack settling from pushing pages through the cover.
@@ -1050,45 +1054,13 @@ const Page = ({
       return;
     }
 
-    if (!hoveredLink) {
-      if (frontMaterial.emissiveMap || backMaterial.emissiveMap) {
-        frontMaterial.emissiveMap = null;
-        backMaterial.emissiveMap = null;
-        frontMaterial.needsUpdate = true;
-        backMaterial.needsUpdate = true;
-      }
-      return;
-    }
-
-    // SVG hover maps can create visible artifacts on detailed icons/buttons.
-    // Keep interaction behavior, but avoid emissive map overlay for SVG regions.
-    if (hoveredLink.region.highlightShape === "svg") {
-      if (frontMaterial.emissiveMap || backMaterial.emissiveMap) {
-        frontMaterial.emissiveMap = null;
-        backMaterial.emissiveMap = null;
-        frontMaterial.needsUpdate = true;
-        backMaterial.needsUpdate = true;
-      }
-      return;
-    }
-
-    let cancelled = false;
-    const applyMask = async () => {
-      const maskTexture = await drawHoverMaskTexture(hoveredLink.region);
-      if (!maskTexture || cancelled) {
-        return;
-      }
-
-      frontMaterial.emissiveMap = hoveredLink.side === "front" ? maskTexture : null;
-      backMaterial.emissiveMap = hoveredLink.side === "back" ? maskTexture : null;
+    // Disable all page hover highlight visuals while keeping click interactions.
+    if (frontMaterial.emissiveMap || backMaterial.emissiveMap) {
+      frontMaterial.emissiveMap = null;
+      backMaterial.emissiveMap = null;
       frontMaterial.needsUpdate = true;
       backMaterial.needsUpdate = true;
-    };
-
-    void applyMask();
-    return () => {
-      cancelled = true;
-    };
+    }
   }, [drawHoverMaskTexture, hoveredLink, manualSkinnedMesh]);
 
   useFrame((_, delta) => {
@@ -1103,12 +1075,10 @@ const Page = ({
 
 
     const materials = skinnedMeshRef.current.material as MeshStandardMaterial[];
-    const wholePageHighlight = highlighted && !hasLinkRegionsOnSheet;
-    const svgRegionHovered = hoveredLink?.region.highlightShape === "svg";
-    const frontHighlighted = wholePageHighlight || (!svgRegionHovered && hoveredLink?.side === "front");
-    const backHighlighted = wholePageHighlight || (!svgRegionHovered && hoveredLink?.side === "back");
-    const frontEmissiveIntensity = frontHighlighted ? 0.38 : 0;
-    const backEmissiveIntensity = backHighlighted ? 0.38 : 0;
+    const frontHighlighted = false;
+    const backHighlighted = false;
+    const frontEmissiveIntensity = 0;
+    const backEmissiveIntensity = 0;
 
     if (materials[4] && (frontHighlighted || materials[4].emissiveIntensity > 0.001)) {
       materials[4].emissiveIntensity = MathUtils.lerp(
@@ -1358,6 +1328,19 @@ const Page = ({
     [contentEnabled, dynamicLinkRegions, isPointInsideSvgShape, number],
   );
 
+  const resolveHitRegionAction = useCallback((region: LinkHitRegion) => {
+    if (region.interactionType === "resume_modal") {
+      return { type: "resume_modal" as const };
+    }
+
+    const sanitized = sanitizeLinkUrl(region.url);
+    if (!sanitized) {
+      return null;
+    }
+
+    return { type: "external_url" as const, url: sanitized };
+  }, []);
+
   const handleSkinnedMeshPointerMove = useCallback(
     (event: ThreeEvent<PointerEvent>) => {
       if (interactionDisabled || hoverEffectsDisabled || !hasLinkRegionsOnSheet) {
@@ -1371,7 +1354,7 @@ const Page = ({
       event.stopPropagation();
 
       const hitRegion = getHitLinkRegion(event.uv, event.face?.materialIndex);
-      if (!hitRegion) {
+      if (!hitRegion || !resolveHitRegionAction(hitRegion.region)) {
         setHoveredLink((prev) => (prev ? null : prev));
         return;
       }
@@ -1391,7 +1374,7 @@ const Page = ({
         return hitRegion;
       });
     },
-    [getHitLinkRegion, hasLinkRegionsOnSheet, hoverEffectsDisabled, interactionDisabled],
+    [getHitLinkRegion, hasLinkRegionsOnSheet, hoverEffectsDisabled, interactionDisabled, resolveHitRegionAction],
   );
 
   const handleSkinnedMeshClick = useCallback(
@@ -1405,30 +1388,26 @@ const Page = ({
         return;
       }
 
-      // Consume click so page flip does not trigger when user clicks a linked block,
-      // and prevent the event from leaking to page meshes behind this one.
+      const action = resolveHitRegionAction(hitRegion.region);
+      if (!action) {
+        return;
+      }
+
+      // Consume click only when a valid link action exists.
+      // Otherwise allow page flip behavior to run on the sheet.
       event.stopPropagation();
-      if (hitRegion.region.interactionType === "resume_modal") {
+      if (action.type === "resume_modal") {
         onResumeLinkClick?.();
         setHighlighted(false);
         setHoveredLink(null);
         return;
       }
 
-      if (!hitRegion.region.url) {
-        return;
-      }
-
-      const sanitized = sanitizeLinkUrl(hitRegion.region.url);
-      if (!sanitized) {
-        return;
-      }
-
-      openExternalLink(sanitized);
+      openExternalLink(action.url);
       setHighlighted(false);
       setHoveredLink(null);
     },
-    [getHitLinkRegion, interactionDisabled, onResumeLinkClick],
+    [getHitLinkRegion, interactionDisabled, onResumeLinkClick, resolveHitRegionAction],
   );
 
   return (
@@ -1441,14 +1420,10 @@ const Page = ({
         }
         // Don't consume event if clicking this page would go out of the allowed range.
         // Letting the event propagate allows the correct overlapping sheet to handle it.
-        const targetPage = opened ? number : number + 1;
-        if (targetPage < minPage || targetPage > maxPage) {
+        if (!canFlipOnClick) {
           return;
         }
         event.stopPropagation();
-        if (!hasLinkRegionsOnSheet) {
-          setHighlighted(true);
-        }
       }}
       onPointerLeave={(event) => {
         event.stopPropagation();
@@ -1472,8 +1447,14 @@ const Page = ({
         // Only consume the click when this sheet can actually flip.
         // If out of range, let the event propagate so an overlapping sheet
         // (whose bind-pose geometry coincides) can handle the flip instead.
-        const targetPage = opened ? number : number + 1;
-        if (targetPage < minPage || targetPage > maxPage) {
+        if (!canFlipOnClick) {
+          // Never forward blocked cover clicks to overlapping sheets.
+          // This prevents the back of front cover from flipping page 1 -> 2.
+          if (isCoverPage) {
+            event.stopPropagation();
+            setHighlighted(false);
+            setHoveredLink(null);
+          }
           return;
         }
         event.stopPropagation();

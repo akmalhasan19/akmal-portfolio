@@ -1953,12 +1953,13 @@ export default function Hero() {
             <Html
               center
               distanceFactor={1.0}
-              style={{ pointerEvents: showBackButton && (spotlightBook === 'book2' || currentSpotlightPage <= 1) ? 'auto' : 'none' }}
+              style={{ pointerEvents: 'none' }}
               zIndexRange={[100, 0]}
             >
               <button
                 onClick={handleBackToOverview}
                 style={{
+                  pointerEvents: showBackButton && (spotlightBook === 'book2' || currentSpotlightPage <= 1) ? 'auto' : 'none',
                   display: 'flex',
                   alignItems: 'center',
                   gap: '8px',

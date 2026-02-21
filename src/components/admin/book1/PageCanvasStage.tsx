@@ -14,6 +14,7 @@ import type {
 import { canAddBlock } from "@/lib/book-content/validation";
 import { getSnappedDragDelta, getSnappedUniformResizeScale } from "@/lib/book-content/block-snap";
 import {
+    contentLanguageAtom,
     nudgeStepAtom,
     selectedBlockIdAtom,
     selectedBlockIdsAtom,
@@ -31,6 +32,7 @@ import {
 } from "@/lib/book-content/visual-crop-interaction";
 import { normalizeVisualCrop } from "@/lib/book-content/visual-crop";
 import { computeSafeArea } from "@/lib/book-content/padding";
+import type { LanguageCode } from "@/lib/i18n/language";
 
 const CANVAS_DISPLAY_WIDTH = 600;
 const PAGE_ASPECT_RATIO = 1.71 / 1.28;
@@ -86,6 +88,13 @@ function clamp(value: number, min: number, max: number): number {
     return Math.min(max, Math.max(min, value));
 }
 
+function cloneLayoutBlock(block: LayoutBlock): LayoutBlock {
+    if (typeof structuredClone === "function") {
+        return structuredClone(block);
+    }
+    return JSON.parse(JSON.stringify(block)) as LayoutBlock;
+}
+
 function isTypingTarget(target: EventTarget | null): boolean {
     if (!(target instanceof HTMLElement)) {
         return false;
@@ -138,6 +147,20 @@ function isVisualBlock(block: LayoutBlock): block is LayoutBlock & (
     | { type: "svg"; crop?: VisualCrop }
 ) {
     return block.type === "image" || block.type === "svg";
+}
+
+function resolveTextContentByLanguage(
+    block: TextBlock,
+    language: LanguageCode,
+): string {
+    const localized = block.contentByLanguage;
+    if (!localized) {
+        return block.content;
+    }
+    if (language === "en") {
+        return localized.en ?? localized.id ?? block.content;
+    }
+    return localized.id ?? block.content;
 }
 
 function getShapeClipPath(shapeType: ShapeBlock["shapeType"]): string | undefined {
@@ -270,6 +293,7 @@ export function PageCanvasStage({
     const selectedBlockId = useAtomValue(selectedBlockIdAtom);
     const setSelectedBlockId = useSetAtom(selectedBlockIdAtom);
     const nudgeStep = useAtomValue(nudgeStepAtom);
+    const contentLanguage = useAtomValue(contentLanguageAtom);
 
     const selectedBlockIdSet = useMemo(
         () => new Set(selectedBlockIds),
@@ -540,7 +564,9 @@ export function PageCanvasStage({
     const copySelectedBlocks = useCallback(() => {
         if (selectedBlockIds.length === 0) return;
         const target = new Set(selectedBlockIds);
-        clipboardRef.current = layout.blocks.filter((b) => target.has(b.id));
+        clipboardRef.current = layout.blocks
+            .filter((b) => target.has(b.id))
+            .map(cloneLayoutBlock);
     }, [layout.blocks, selectedBlockIds]);
 
     const pasteBlocks = useCallback(() => {
@@ -554,7 +580,7 @@ export function PageCanvasStage({
         const newIds: string[] = [];
 
         for (let i = 0; i < source.length; i++) {
-            const block = source[i];
+            const block = cloneLayoutBlock(source[i]);
             const id = crypto.randomUUID();
             newIds.push(id);
             newBlocks.push({
@@ -631,7 +657,21 @@ export function PageCanvasStage({
 
     useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {
-            if (selectedBlockIds.length === 0 || isTypingTarget(event.target)) {
+            if (isTypingTarget(event.target)) {
+                return;
+            }
+
+            const isCtrl = event.ctrlKey || event.metaKey;
+            const key = event.key.toLowerCase();
+
+            // Allow paste across pages even when nothing is selected on target page.
+            if (isCtrl && key === "v") {
+                event.preventDefault();
+                pasteBlocks();
+                return;
+            }
+
+            if (selectedBlockIds.length === 0) {
                 return;
             }
 
@@ -641,21 +681,13 @@ export function PageCanvasStage({
                 return;
             }
 
-            const isCtrl = event.ctrlKey || event.metaKey;
-
-            if (isCtrl && event.key === "c") {
+            if (isCtrl && key === "c") {
                 event.preventDefault();
                 copySelectedBlocks();
                 return;
             }
 
-            if (isCtrl && event.key === "v") {
-                event.preventDefault();
-                pasteBlocks();
-                return;
-            }
-
-            if (isCtrl && event.key === "d") {
+            if (isCtrl && key === "d") {
                 event.preventDefault();
                 duplicateSelectedBlocks();
                 return;
@@ -1380,7 +1412,7 @@ export function PageCanvasStage({
                                         textIndent: (block.style.listType ?? "none") !== "none" ? "-1.6em" : undefined,
                                     }}
                                 >
-                                    {block.content || "..."}
+                                    {resolveTextContentByLanguage(block, contentLanguage) || "..."}
                                 </div>
                             ) : block.type === "image" ? (
                                 <div

@@ -1,8 +1,8 @@
 "use client";
 
 import { useAtom, useAtomValue } from "jotai";
-import { useState } from "react";
 import {
+    contentLanguageAtom,
     nudgeStepAtom,
     selectedBlockIdAtom,
     selectedBlockIdsAtom,
@@ -182,7 +182,7 @@ export function BlockInspector({
     onLayoutChange,
 }: BlockInspectorProps) {
     const [moveStep, setMoveStep] = useAtom(nudgeStepAtom);
-    const [contentLanguage, setContentLanguage] = useState<LanguageCode>("id");
+    const [contentLanguage, setContentLanguage] = useAtom(contentLanguageAtom);
     const selectedBlockIds = useAtomValue(selectedBlockIdsAtom);
     const selectedBlockId = useAtomValue(selectedBlockIdAtom);
     const selectedBlocks = layout.blocks.filter((b) => selectedBlockIds.includes(b.id));

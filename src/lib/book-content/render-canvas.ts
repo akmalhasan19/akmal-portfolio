@@ -15,7 +15,7 @@ import { getVisualCropSourceRect } from "./visual-crop";
 
 // ── Constants ────────────────────────────────
 
-export const CANVAS_RENDERER_VERSION = "14";
+export const CANVAS_RENDERER_VERSION = "16";
 export const BASE_CANVAS_HEIGHT = 1536;
 const DEFAULT_BG_COLOR = normalizePaperBackground();
 const MAX_IMAGE_CACHE_ENTRIES = 96;
@@ -1081,6 +1081,8 @@ export async function renderPageSideToCanvas(
     canvasWidth: number,
     canvasHeight: number,
     language: RenderLanguageCode = "id",
+    /** Optional display page number drawn at the bottom center. */
+    pageNumber?: number,
 ): Promise<HTMLCanvasElement> {
     const canvas = document.createElement("canvas");
     canvas.width = canvasWidth;
@@ -1183,6 +1185,26 @@ export async function renderPageSideToCanvas(
                 console.warn("[render-canvas] Failed to draw block", block.id);
             }
         }
+    }
+
+    // 6. Draw page number at the bottom center (if provided)
+    if (pageNumber != null && pageNumber > 0) {
+        const pageNumFontSize = Math.round(42 * scaleY);
+        const pageNumFont = `500 ${pageNumFontSize}px serif`;
+        const pageNumColor = "#4a3d32";
+        const bottomMargin = Math.round(36 * scaleY);
+
+        ctx.save();
+        ctx.font = pageNumFont;
+        ctx.fillStyle = pageNumColor;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "bottom";
+        ctx.fillText(
+            String(pageNumber),
+            canvasWidth / 2,
+            canvasHeight - bottomMargin,
+        );
+        ctx.restore();
     }
 
     return canvas;

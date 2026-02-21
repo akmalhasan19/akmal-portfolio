@@ -31,6 +31,28 @@ interface UseBookSideTexturesOptions {
     language?: LanguageCode;
 }
 
+/**
+ * Compute the display page number for an interior page-side.
+ * Returns undefined for cover pages (front cover and back cover).
+ *
+ * Page index 0 = front cover sheet  (no number on either side)
+ * Page index (total-1) = back cover sheet (no number on either side)
+ * Interior sheets (1 … total-2):
+ *   front → (pageIndex - 1) * 2 + 1
+ *   back  → (pageIndex - 1) * 2 + 2
+ */
+function computeDisplayPageNumber(
+    pageIndex: number,
+    side: "front" | "back",
+    totalPageEntries: number,
+): number | undefined {
+    // Cover sheets never get a number
+    if (pageIndex <= 0 || pageIndex >= totalPageEntries - 1) {
+        return undefined;
+    }
+    return (pageIndex - 1) * 2 + (side === "back" ? 2 : 1);
+}
+
 interface UseBookSideContentResult {
     textures: DynamicTextureMap;
     linkRegions: LinkRegionMap;
@@ -269,7 +291,13 @@ export function useBookSideContent({
                 fetchedKeys.add(key);
 
                 const { layout: validatedLayout } = validateLayout(row.layout);
-                const hash = `${layoutHash(validatedLayout, canvasWidth, canvasHeight)}:${language}`;
+                const displayPageNumber = computeDisplayPageNumber(
+                    row.page_index,
+                    row.side,
+                    totalPageEntries,
+                );
+
+                const hash = `${layoutHash(validatedLayout, canvasWidth, canvasHeight)}:${language}:pn${displayPageNumber ?? ""}`;
 
                 linkRegionCacheRef.current.set(
                     key,
@@ -281,7 +309,7 @@ export function useBookSideContent({
                 }
 
                 renderPromises.push(
-                    renderPageSideToCanvas(validatedLayout, canvasWidth, canvasHeight, language)
+                    renderPageSideToCanvas(validatedLayout, canvasWidth, canvasHeight, language, displayPageNumber)
                         .then((canvas) => {
                             if (cancelled) {
                                 return;
