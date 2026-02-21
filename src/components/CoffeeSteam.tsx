@@ -2,9 +2,6 @@ import { ThreeElements, useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
 
-// Billboard Vertex Shader
-// Transforms local corner vertices (of a quad) into View Space first,
-// effectively making the quad always face the camera.
 const vertexShader = `
 uniform float uTime;
 attribute float aOffset;
@@ -21,50 +18,33 @@ void main() {
   vUv = uv;
   vOffset = aOffset;
 
-  // Calculate life progress (0.0 to 1.0) based on time and offset
-  // We use uTime and aOffset to create a continuous loop
   float lifeDuration = 12.0;
   float time = uTime + aOffset;
   float progress = mod(time, lifeDuration) / lifeDuration;
   
-  // Fade in faster, fade out smoother
   vAlpha = smoothstep(0.0, 0.2, progress) * (1.0 - smoothstep(0.6, 1.0, progress));
   
-  // Calculate position
-  // Move up (y) and slightly outward (x, z)
   vec3 pos = vec3(0.0);
   
-  // Initial random spread at base
-  // We use aVelocity as a random seed for initial position too
   float randomAngle = aRotation * 6.28;
-  float randomRadius = length(aVelocity.xz) * 0.05; // Starting point is tight (cup center)
+  float randomRadius = length(aVelocity.xz) * 0.05;
   pos.x += cos(randomAngle) * randomRadius;
   pos.z += sin(randomAngle) * randomRadius;
   
-  // Upward movement
   pos.y += progress * 1.4;
   
-  // S-Curve distortion for "swirl"
   float sway = sin(progress * 7.0 + aOffset) * 0.07 * progress;
   pos.x += sway;
   
-  // Outward expansion (diffusion)
   float expansion = progress * 0.35;
   pos.x += (aVelocity.x * expansion);
   pos.z += (aVelocity.z * expansion);
   
-  // Scale increases with age
-  // Elongate vertically for "streak" look
   float currentScaleX = aScale * (0.45 + progress * 0.8);
-  float currentScaleY = currentScaleX * 2.0; // Taller than wide
+  float currentScaleY = currentScaleX * 2.0;
   
-  // Billboard Logic
-  // 1. Get model view position of the center
   vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
   
-  // 2. Add vertex offset scaled by size (camera facing)
-  // Since we are in View Space, the camera is at (0,0,0) looking down -Z.
-  // The plane's local x/y are aligned with view x/y.
   mvPosition.x += position.x * currentScaleX;
   mvPosition.y += position.y * currentScaleY;
   
@@ -79,8 +59,6 @@ varying float vOffset;
 uniform vec3 uColor;
 uniform float uTime;
 
-// Simplex 2D noise
-// From: https://github.com/patriciogonzalezvivo/thebookofshaders/blob/master/glsl/noise/snoise.glsl
 vec3 permute(vec3 x) { return mod(((x*34.0)+1.0)*x, 289.0); }
 
 float snoise(vec2 v){
@@ -109,12 +87,10 @@ float snoise(vec2 v){
   return 130.0 * dot(m, g);
 }
 
-// FBM (Fractal Brownian Motion)
 float fbm(vec2 x) {
 	float v = 0.0;
 	float a = 0.5;
 	vec2 shift = vec2(100.0);
-	// Basic rotation matrix
     mat2 rot = mat2(cos(0.5), sin(0.5), -sin(0.5), cos(0.50));
   for (int i = 0; i < 2; ++i) {
 		v += a * snoise(x);
@@ -125,45 +101,27 @@ float fbm(vec2 x) {
 }
 
 void main() {
-  // Center coordinates
   vec2 uv = vUv;
-  
-  // Time offset from particle distinct offset
+
   float time = uTime * 0.35 + vOffset;
-  
-  // Rising coordinates
+
   vec2 noiseUV = uv * vec2(1.0, 2.0) - vec2(0.0, time);
-  
-  // FBM Noise pattern
-  // Multiply by high frequency to get "wispy strands"
+
   float noise = fbm(noiseUV * 2.4);
-  
-  // Remap noise
+
   noise = noise * 0.5 + 0.5;
-  
-  // Shape masking:
-  // Instead of a circle, use a vertical "snake" or "column"
-  // Horizontal fade (sides)
+
   float distX = abs(uv.x - 0.5);
   float maskX = 1.0 - smoothstep(0.0, 0.4, distX);
-  
-  // Vertical fade (top/bottom softness within the quad itself)
-  // Fade in quickly at bottom (0.0 to 0.15)
-  // Constant fade out all the way to top (0.15 to 1.0) to make it disappear as it rises
+
   float maskY = smoothstep(0.0, 0.15, uv.y) * (1.0 - smoothstep(0.15, 1.0, uv.y));
-  
-  // Combine all
-  // High contrast on noise to make "strands" pop out from transparent background
-  // Increase threshold to thin out the smoke (only hottest parts visible)
+
   float smokeShape = smoothstep(0.52, 1.0, noise * maskX);
-  
-  // modulate alpha
-  // Apply fading maskY here
-  // Ultra subtle opacity
+
   float finalAlpha = smokeShape * vAlpha * maskY * 0.05;
-  
+
   if (finalAlpha < 0.001) discard;
-  
+
   gl_FragColor = vec4(uColor, finalAlpha);
 }
 `;
@@ -178,14 +136,11 @@ export const CoffeeSteam = (props: ThreeElements["group"]) => {
   const meshRef = useRef<THREE.InstancedMesh>(null);
   const materialRef = useRef<THREE.ShaderMaterial>(null);
 
-  // Memoize uniforms to prevent recreation on re-render
-  // This ensures uTime persists across component re-renders
   const uniforms = useMemo(() => ({
     uTime: { value: 0 },
     uColor: { value: new THREE.Color("#eeeeee") },
   }), []);
 
-  // Initialize attributes
   const { offsets, scales, rotations, velocities } = useMemo(() => {
     const offsets = new Float32Array(PARTICLE_COUNT);
     const scales = new Float32Array(PARTICLE_COUNT);
@@ -217,7 +172,6 @@ export const CoffeeSteam = (props: ThreeElements["group"]) => {
 
   useFrame((state, delta) => {
     if (materialRef.current) {
-      // Use delta to ensure continuous movement regardless of clock resets
       timeRef.current += delta;
       materialRef.current.uniforms.uTime.value = timeRef.current;
     }

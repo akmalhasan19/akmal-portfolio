@@ -46,7 +46,6 @@ function computeDisplayPageNumber(
     side: "front" | "back",
     totalPageEntries: number,
 ): number | undefined {
-    // Cover sheets never get a number
     if (pageIndex <= 0 || pageIndex >= totalPageEntries - 1) {
         return undefined;
     }
@@ -328,7 +327,6 @@ export function useBookSideContent({
                             layoutCacheRef.current.set(key, hash);
                         })
                         .catch(() => {
-                            // Skip failed render.
                         }),
                 );
             }
